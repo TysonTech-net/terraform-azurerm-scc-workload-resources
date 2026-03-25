@@ -12,7 +12,7 @@ variable "vending" {
     # Resource Groups
     resource_group_creation_enabled = optional(bool, false)
     resource_groups = optional(map(object({
-      name         = string
+      name         = optional(string)
       location     = optional(string)
       tags         = optional(map(string), {})
       lock_enabled = optional(bool, false)
@@ -22,7 +22,8 @@ variable "vending" {
     # Virtual Networks
     virtual_network_enabled = optional(bool, false)
     virtual_networks = optional(map(object({
-      name                         = string
+      # Name is optional - auto-generated as: vnet-{workload}-{env}-{region_abbr}-{instance}
+      name                         = optional(string)
       address_space                = list(string)
       resource_group_key           = optional(string)
       resource_group_name_existing = optional(string)

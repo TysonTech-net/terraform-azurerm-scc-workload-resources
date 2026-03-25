@@ -313,7 +313,7 @@ variable "management" {
 
     # Key Vault
     deploy_management_key_vault                   = optional(bool, true)
-    management_kv_name                            = string
+    management_kv_name                            = optional(string, null) # Auto-generated if null: kv{workload}{region}{random4}{instance}
     management_kv_tenant_id                       = string
     management_kv_tags                            = optional(map(string), null)
     management_kv_enable_telemetry                = optional(bool, true)

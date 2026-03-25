@@ -1,10 +1,10 @@
 module "workload_management" {
-  source   = "../../alz-modules/modules/scc-azure-workload-management"
+  source   = "../../modules/scc-azure-workload-management"
   for_each = var.management
 
   # Shared
   location         = each.value.location
-  tags             = each.value.tags
+  tags             = merge(var.tags, each.value.tags)
   enable_telemetry = each.value.enable_telemetry
 
   # Resource Group
@@ -64,7 +64,7 @@ module "workload_management" {
 
   # Key Vault
   deploy_management_key_vault                           = each.value.deploy_management_key_vault
-  management_kv_name                                    = each.value.management_kv_name
+  management_kv_name                                    = coalesce(each.value.management_kv_name, "${local.naming.key_vault_base[each.value.location]}${random_string.key_vault_suffix[each.key].result}${var.naming.instance}")
   management_kv_tenant_id                               = each.value.management_kv_tenant_id
   management_kv_tags                                    = each.value.management_kv_tags
   management_kv_enable_telemetry                        = each.value.management_kv_enable_telemetry
