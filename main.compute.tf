@@ -99,7 +99,7 @@ locals {
 ###############################################################################
 
 module "workload_vms" {
-  source   = "../../modules/scc-azure-workload-vm"
+  source   = "git::https://github.com/TysonTech-net/terraform-azurerm-scc-workload-vm.git?ref=v1.0.0"
   for_each = var.compute_enabled ? var.compute : {}
 
   # Subscription
