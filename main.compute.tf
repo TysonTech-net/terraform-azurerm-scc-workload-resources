@@ -103,25 +103,31 @@ locals {
 ###############################################################################
 
 locals {
+  # Regions where Key Vault is enabled (uses the management variable, known at plan time).
+  # Cannot use module output here because resource IDs are unknown on first plan.
+  _kv_enabled_regions = toset([
+    for region, config in var.management : region
+    if try(config.deploy_management_key_vault, false)
+  ])
+
   # Map of region -> Key Vault resource ID from the management module.
-  # Only includes regions where Key Vault was actually deployed (count = 1).
+  # Only populated for regions where Key Vault was deployed.
   regional_kv_resource_ids = {
-    for region, mgmt in module.workload_management :
-    region => try(mgmt.management_kv_resource_id[0], null)
-    if try(mgmt.management_kv_resource_id[0], null) != null
+    for region in local._kv_enabled_regions :
+    region => try(module.workload_management[region].management_kv_resource_id[0], null)
   }
 
   # Determine which VMs in which regions should get auto-generated credentials.
   # A VM qualifies when:
   # 1. compute_auto_credential_keyvault_enabled = true
-  # 2. A Key Vault exists for the region
+  # 2. Key Vault is enabled for the region (from tfvars, known at plan time)
   # 3. The VM does not have an explicit admin_password
   # 4. The VM does not already have generated_secrets_key_vault_secret_config
   _credential_injection_eligible = {
     for region, vms in local.compute_vms_with_resolved_subnets : region => {
       for vm_key, vm in vms : vm_key =>
         var.compute_auto_credential_keyvault_enabled
-        && contains(keys(local.regional_kv_resource_ids), region)
+        && contains(local._kv_enabled_regions, region)
         && try(vm.admin_password, null) == null
         && try(vm.generated_secrets_key_vault_secret_config, null) == null
     }
@@ -149,6 +155,8 @@ resource "azurerm_role_assignment" "terraform_kv_secrets_officer" {
   scope                = each.value
   role_definition_name = "Key Vault Secrets Officer"
   principal_id         = data.azurerm_client_config.current.object_id
+
+  depends_on = [module.workload_management]
 }
 
 ###############################################################################
