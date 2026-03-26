@@ -95,6 +95,55 @@ locals {
 }
 
 ###############################################################################
+# Key Vault Credential Auto-Storage
+#
+# When compute_auto_credential_keyvault_enabled = true, VMs that don't specify
+# an explicit admin_password get auto-generated credentials stored in the
+# regional Key Vault deployed by the management module.
+###############################################################################
+
+locals {
+  # Map of region -> Key Vault resource ID from the management module.
+  # Only includes regions where Key Vault was actually deployed (count = 1).
+  regional_kv_resource_ids = {
+    for region, mgmt in module.workload_management :
+    region => try(mgmt.management_kv_resource_id[0], null)
+    if try(mgmt.management_kv_resource_id[0], null) != null
+  }
+
+  # Inject Key Vault credential config into VMs when:
+  # 1. compute_auto_credential_keyvault_enabled = true
+  # 2. A Key Vault exists for the region
+  # 3. The VM does not have an explicit admin_password
+  # 4. The VM does not already have generated_secrets_key_vault_secret_config
+  compute_vms_with_credentials = {
+    for region, vms in local.compute_vms_with_resolved_subnets : region => {
+      for vm_key, vm in vms : vm_key => merge(vm, (
+        var.compute_auto_credential_keyvault_enabled
+        && contains(keys(local.regional_kv_resource_ids), region)
+        && try(vm.admin_password, null) == null
+        && try(vm.generated_secrets_key_vault_secret_config, null) == null
+      ) ? {
+        generate_admin_password_or_ssh_key = true
+        generated_secrets_key_vault_secret_config = {
+          key_vault_resource_id = local.regional_kv_resource_ids[region]
+        }
+      } : {})
+    }
+  }
+}
+
+# Grant Terraform identity "Key Vault Secrets Officer" on each regional Key Vault
+# so the AVM VM module can store generated credentials as secrets.
+resource "azurerm_role_assignment" "terraform_kv_secrets_officer" {
+  for_each = var.compute_auto_credential_keyvault_enabled && var.compute_enabled ? local.regional_kv_resource_ids : {}
+
+  scope                = each.value
+  role_definition_name = "Key Vault Secrets Officer"
+  principal_id         = data.azurerm_client_config.current.object_id
+}
+
+###############################################################################
 # Module - Workload VMs
 ###############################################################################
 
@@ -125,8 +174,8 @@ module "workload_vms" {
   # VM Resource Groups
   vm_resource_groups = each.value.vm_resource_groups
 
-  # Virtual Machines with resolved subnet IDs
-  vms = local.compute_vms_with_resolved_subnets[each.key]
+  # Virtual Machines with resolved subnet IDs and Key Vault credential config
+  vms = local.compute_vms_with_credentials[each.key]
 
   # Backup Defaults
   backup_defaults = each.value.backup_defaults
@@ -142,6 +191,10 @@ module "workload_vms" {
   # ASR/BCDR Configuration - enables Site Recovery replication to target region
   asr_config = each.value.asr_config
 
-  # Depends on vending to ensure subnets exist before VMs are created
-  depends_on = [module.subscription_vending]
+  # Depends on vending (subnets), management (Key Vault), and RBAC (secrets officer)
+  depends_on = [
+    module.subscription_vending,
+    module.workload_management,
+    azurerm_role_assignment.terraform_kv_secrets_officer,
+  ]
 }
