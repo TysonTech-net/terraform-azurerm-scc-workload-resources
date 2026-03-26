@@ -111,24 +111,32 @@ locals {
     if try(mgmt.management_kv_resource_id[0], null) != null
   }
 
-  # Inject Key Vault credential config into VMs when:
+  # Determine which VMs in which regions should get auto-generated credentials.
+  # A VM qualifies when:
   # 1. compute_auto_credential_keyvault_enabled = true
   # 2. A Key Vault exists for the region
   # 3. The VM does not have an explicit admin_password
   # 4. The VM does not already have generated_secrets_key_vault_secret_config
-  compute_vms_with_credentials = {
+  _credential_injection_eligible = {
     for region, vms in local.compute_vms_with_resolved_subnets : region => {
-      for vm_key, vm in vms : vm_key => merge(vm, (
+      for vm_key, vm in vms : vm_key =>
         var.compute_auto_credential_keyvault_enabled
         && contains(keys(local.regional_kv_resource_ids), region)
         && try(vm.admin_password, null) == null
         && try(vm.generated_secrets_key_vault_secret_config, null) == null
-      ) ? {
-        generate_admin_password_or_ssh_key = true
-        generated_secrets_key_vault_secret_config = {
+    }
+  }
+
+  # Inject Key Vault credential config into eligible VMs.
+  # Uses explicit field overrides to avoid Terraform's conditional type mismatch.
+  compute_vms_with_credentials = {
+    for region, vms in local.compute_vms_with_resolved_subnets : region => {
+      for vm_key, vm in vms : vm_key => merge(vm, {
+        generate_admin_password_or_ssh_key = try(local._credential_injection_eligible[region][vm_key], false) ? true : try(vm.generate_admin_password_or_ssh_key, null)
+        generated_secrets_key_vault_secret_config = try(local._credential_injection_eligible[region][vm_key], false) ? {
           key_vault_resource_id = local.regional_kv_resource_ids[region]
-        }
-      } : {})
+        } : try(vm.generated_secrets_key_vault_secret_config, null)
+      })
     }
   }
 }
