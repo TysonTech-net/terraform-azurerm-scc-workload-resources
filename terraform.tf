@@ -24,6 +24,9 @@ terraform {
 # Get subscription details for dynamic naming
 data "azurerm_subscription" "current" {}
 
+# Get current Terraform identity (for Key Vault RBAC)
+data "azurerm_client_config" "current" {}
+
 ###############################################################################
 # Module - Azure Regions Utility
 ###############################################################################

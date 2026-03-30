@@ -8,6 +8,28 @@ variable "compute_enabled" {
   description = "Enable or disable deployment of compute resources (VMs). When false, no VMs will be deployed regardless of the compute variable contents."
 }
 
+variable "compute_auto_credential_keyvault_enabled" {
+  type        = bool
+  default     = true
+  description = <<DESCRIPTION
+When true and a regional Key Vault exists (deploy_management_key_vault = true),
+the stack automatically:
+  1. Sets generate_admin_password_or_ssh_key = true for VMs without an explicit admin_password
+  2. Injects generated_secrets_key_vault_secret_config pointing to the regional Key Vault
+  3. Grants the Terraform identity Key Vault Secrets Officer to write the generated secret
+
+This removes the need for plaintext passwords in tfvars. VMs that explicitly set
+admin_password bypass auto-generation and are not stored in Key Vault.
+DESCRIPTION
+}
+
+variable "vm_admin_password" {
+  type        = string
+  sensitive   = true
+  default     = null
+  description = "Fallback admin password for VMs that don't set admin_password explicitly. Injected via TF_VAR_vm_admin_password from .env or CI secrets. When null, VMs without admin_password get auto-generated credentials stored in Key Vault."
+}
+
 variable "compute" {
   type = map(object({
     # Location defaults to the map key (region name) if not specified
@@ -117,6 +139,7 @@ variable "compute" {
       # Authentication
       admin_username                     = optional(string, "azureadmin")
       admin_password                     = optional(string)
+      store_password_in_keyvault         = optional(bool, false) # When true, stores the explicit admin_password in Key Vault
       generate_admin_password_or_ssh_key = optional(bool)
 
       # Telemetry

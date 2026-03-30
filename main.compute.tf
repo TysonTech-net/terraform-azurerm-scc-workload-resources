@@ -95,6 +95,90 @@ locals {
 }
 
 ###############################################################################
+# Key Vault Credential Auto-Storage
+#
+# When compute_auto_credential_keyvault_enabled = true, VMs that don't specify
+# an explicit admin_password get auto-generated credentials stored in the
+# regional Key Vault deployed by the management module.
+###############################################################################
+
+locals {
+  # Regions where Key Vault is enabled (uses the management variable, known at plan time).
+  # Cannot use module output here because resource IDs are unknown on first plan.
+  _kv_enabled_regions = toset([
+    for region, config in var.management : region
+    if try(config.deploy_management_key_vault, false)
+  ])
+
+  # Map of region -> Key Vault resource ID from the management module.
+  # Only populated for regions where Key Vault was deployed.
+  regional_kv_resource_ids = {
+    for region in local._kv_enabled_regions :
+    region => try(module.workload_management[region].management_kv_resource_id[0], null)
+  }
+
+  # Resolve effective admin_password per VM:
+  # Priority: explicit admin_password in tfvars > var.vm_admin_password fallback > null (auto-generate)
+  _effective_admin_password = {
+    for region, vms in local.compute_vms_with_resolved_subnets : region => {
+      for vm_key, vm in vms : vm_key => coalesce(try(vm.admin_password, null), var.vm_admin_password)
+    }
+  }
+
+  # VMs eligible for auto-generated credentials (no password available at all).
+  _credential_autogen_eligible = {
+    for region, vms in local.compute_vms_with_resolved_subnets : region => {
+      for vm_key, vm in vms : vm_key =>
+        var.compute_auto_credential_keyvault_enabled
+        && contains(local._kv_enabled_regions, region)
+        && local._effective_admin_password[region][vm_key] == null
+        && try(vm.generated_secrets_key_vault_secret_config, null) == null
+    }
+  }
+
+  # VMs eligible for storing their password in Key Vault (have a password + KV enabled).
+  _credential_store_eligible = {
+    for region, vms in local.compute_vms_with_resolved_subnets : region => {
+      for vm_key, vm in vms : vm_key =>
+        contains(local._kv_enabled_regions, region)
+        && local._effective_admin_password[region][vm_key] != null
+        && try(vm.store_password_in_keyvault, false) == true
+    }
+  }
+
+  # Inject credentials into VMs. Three modes:
+  #   1. Auto-generate: no password anywhere, generates random + stores in KV
+  #   2. Fallback: vm_admin_password set via env var, used as password + stores in KV
+  #   3. Store explicit: admin_password in tfvars + store_password_in_keyvault, stores in KV
+  compute_vms_with_credentials = {
+    for region, vms in local.compute_vms_with_resolved_subnets : region => {
+      for vm_key, vm in vms : vm_key => merge(vm, {
+        admin_password = local._effective_admin_password[region][vm_key]
+        generate_admin_password_or_ssh_key = try(local._credential_autogen_eligible[region][vm_key], false) ? true : try(vm.generate_admin_password_or_ssh_key, null)
+        generated_secrets_key_vault_secret_config = (
+          try(local._credential_autogen_eligible[region][vm_key], false)
+          || try(local._credential_store_eligible[region][vm_key], false)
+        ) ? {
+          key_vault_resource_id = local.regional_kv_resource_ids[region]
+        } : try(vm.generated_secrets_key_vault_secret_config, null)
+      })
+    }
+  }
+}
+
+# Grant Terraform identity "Key Vault Secrets Officer" on each regional Key Vault
+# so the AVM VM module can store generated credentials as secrets.
+resource "azurerm_role_assignment" "terraform_kv_secrets_officer" {
+  for_each = var.compute_auto_credential_keyvault_enabled && var.compute_enabled ? local.regional_kv_resource_ids : {}
+
+  scope                = each.value
+  role_definition_name = "Key Vault Secrets Officer"
+  principal_id         = data.azurerm_client_config.current.object_id
+
+  depends_on = [module.workload_management]
+}
+
+###############################################################################
 # Module - Workload VMs
 ###############################################################################
 
@@ -125,8 +209,8 @@ module "workload_vms" {
   # VM Resource Groups
   vm_resource_groups = each.value.vm_resource_groups
 
-  # Virtual Machines with resolved subnet IDs
-  vms = local.compute_vms_with_resolved_subnets[each.key]
+  # Virtual Machines with resolved subnet IDs and Key Vault credential config
+  vms = local.compute_vms_with_credentials[each.key]
 
   # Backup Defaults
   backup_defaults = each.value.backup_defaults
@@ -142,6 +226,10 @@ module "workload_vms" {
   # ASR/BCDR Configuration - enables Site Recovery replication to target region
   asr_config = each.value.asr_config
 
-  # Depends on vending to ensure subnets exist before VMs are created
-  depends_on = [module.subscription_vending]
+  # Depends on vending (subnets), management (Key Vault), and RBAC (secrets officer)
+  depends_on = [
+    module.subscription_vending,
+    module.workload_management,
+    azurerm_role_assignment.terraform_kv_secrets_officer,
+  ]
 }
