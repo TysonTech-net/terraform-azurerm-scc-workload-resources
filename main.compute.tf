@@ -117,43 +117,43 @@ locals {
     region => try(module.workload_management[region].management_kv_resource_id[0], null)
   }
 
-  # Determine which VMs should get auto-generated credentials.
-  # A VM qualifies when:
-  # 1. compute_auto_credential_keyvault_enabled = true
-  # 2. Key Vault is enabled for the region
-  # 3. The VM does not have an explicit admin_password
-  # 4. The VM does not already have generated_secrets_key_vault_secret_config
+  # Resolve effective admin_password per VM:
+  # Priority: explicit admin_password in tfvars > var.vm_admin_password fallback > null (auto-generate)
+  _effective_admin_password = {
+    for region, vms in local.compute_vms_with_resolved_subnets : region => {
+      for vm_key, vm in vms : vm_key => coalesce(try(vm.admin_password, null), var.vm_admin_password)
+    }
+  }
+
+  # VMs eligible for auto-generated credentials (no password available at all).
   _credential_autogen_eligible = {
     for region, vms in local.compute_vms_with_resolved_subnets : region => {
       for vm_key, vm in vms : vm_key =>
         var.compute_auto_credential_keyvault_enabled
         && contains(local._kv_enabled_regions, region)
-        && try(vm.admin_password, null) == null
+        && local._effective_admin_password[region][vm_key] == null
         && try(vm.generated_secrets_key_vault_secret_config, null) == null
     }
   }
 
-  # Determine which VMs should store their explicit password in Key Vault.
-  # A VM qualifies when:
-  # 1. Key Vault is enabled for the region
-  # 2. The VM has an explicit admin_password
-  # 3. The VM has store_password_in_keyvault = true
+  # VMs eligible for storing their password in Key Vault (have a password + KV enabled).
   _credential_store_eligible = {
     for region, vms in local.compute_vms_with_resolved_subnets : region => {
       for vm_key, vm in vms : vm_key =>
         contains(local._kv_enabled_regions, region)
-        && try(vm.admin_password, null) != null
+        && local._effective_admin_password[region][vm_key] != null
         && try(vm.store_password_in_keyvault, false) == true
     }
   }
 
-  # Inject Key Vault credential config into eligible VMs.
-  # Two modes:
-  #   - Auto-generate: no admin_password, generates random password + stores in KV
-  #   - Store explicit: admin_password set + store_password_in_keyvault = true, stores in KV
+  # Inject credentials into VMs. Three modes:
+  #   1. Auto-generate: no password anywhere, generates random + stores in KV
+  #   2. Fallback: vm_admin_password set via env var, used as password + stores in KV
+  #   3. Store explicit: admin_password in tfvars + store_password_in_keyvault, stores in KV
   compute_vms_with_credentials = {
     for region, vms in local.compute_vms_with_resolved_subnets : region => {
       for vm_key, vm in vms : vm_key => merge(vm, {
+        admin_password = local._effective_admin_password[region][vm_key]
         generate_admin_password_or_ssh_key = try(local._credential_autogen_eligible[region][vm_key], false) ? true : try(vm.generate_admin_password_or_ssh_key, null)
         generated_secrets_key_vault_secret_config = (
           try(local._credential_autogen_eligible[region][vm_key], false)

@@ -23,6 +23,13 @@ admin_password bypass auto-generation and are not stored in Key Vault.
 DESCRIPTION
 }
 
+variable "vm_admin_password" {
+  type        = string
+  sensitive   = true
+  default     = null
+  description = "Fallback admin password for VMs that don't set admin_password explicitly. Injected via TF_VAR_vm_admin_password from .env or CI secrets. When null, VMs without admin_password get auto-generated credentials stored in Key Vault."
+}
+
 variable "compute" {
   type = map(object({
     # Location defaults to the map key (region name) if not specified
