@@ -121,7 +121,7 @@ locals {
   # Priority: explicit admin_password in tfvars > var.vm_admin_password fallback > null (auto-generate)
   _effective_admin_password = {
     for region, vms in local.compute_vms_with_resolved_subnets : region => {
-      for vm_key, vm in vms : vm_key => coalesce(try(vm.admin_password, null), var.vm_admin_password)
+      for vm_key, vm in vms : vm_key => try(vm.admin_password, null) != null ? vm.admin_password : var.vm_admin_password
     }
   }
 
