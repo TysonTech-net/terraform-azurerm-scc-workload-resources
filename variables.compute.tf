@@ -132,6 +132,7 @@ variable "compute" {
       # Authentication
       admin_username                     = optional(string, "azureadmin")
       admin_password                     = optional(string)
+      store_password_in_keyvault         = optional(bool, false) # When true, stores the explicit admin_password in Key Vault
       generate_admin_password_or_ssh_key = optional(bool)
 
       # Telemetry

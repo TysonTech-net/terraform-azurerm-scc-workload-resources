@@ -117,13 +117,13 @@ locals {
     region => try(module.workload_management[region].management_kv_resource_id[0], null)
   }
 
-  # Determine which VMs in which regions should get auto-generated credentials.
+  # Determine which VMs should get auto-generated credentials.
   # A VM qualifies when:
   # 1. compute_auto_credential_keyvault_enabled = true
-  # 2. Key Vault is enabled for the region (from tfvars, known at plan time)
+  # 2. Key Vault is enabled for the region
   # 3. The VM does not have an explicit admin_password
   # 4. The VM does not already have generated_secrets_key_vault_secret_config
-  _credential_injection_eligible = {
+  _credential_autogen_eligible = {
     for region, vms in local.compute_vms_with_resolved_subnets : region => {
       for vm_key, vm in vms : vm_key =>
         var.compute_auto_credential_keyvault_enabled
@@ -133,13 +133,32 @@ locals {
     }
   }
 
+  # Determine which VMs should store their explicit password in Key Vault.
+  # A VM qualifies when:
+  # 1. Key Vault is enabled for the region
+  # 2. The VM has an explicit admin_password
+  # 3. The VM has store_password_in_keyvault = true
+  _credential_store_eligible = {
+    for region, vms in local.compute_vms_with_resolved_subnets : region => {
+      for vm_key, vm in vms : vm_key =>
+        contains(local._kv_enabled_regions, region)
+        && try(vm.admin_password, null) != null
+        && try(vm.store_password_in_keyvault, false) == true
+    }
+  }
+
   # Inject Key Vault credential config into eligible VMs.
-  # Uses explicit field overrides to avoid Terraform's conditional type mismatch.
+  # Two modes:
+  #   - Auto-generate: no admin_password, generates random password + stores in KV
+  #   - Store explicit: admin_password set + store_password_in_keyvault = true, stores in KV
   compute_vms_with_credentials = {
     for region, vms in local.compute_vms_with_resolved_subnets : region => {
       for vm_key, vm in vms : vm_key => merge(vm, {
-        generate_admin_password_or_ssh_key = try(local._credential_injection_eligible[region][vm_key], false) ? true : try(vm.generate_admin_password_or_ssh_key, null)
-        generated_secrets_key_vault_secret_config = try(local._credential_injection_eligible[region][vm_key], false) ? {
+        generate_admin_password_or_ssh_key = try(local._credential_autogen_eligible[region][vm_key], false) ? true : try(vm.generate_admin_password_or_ssh_key, null)
+        generated_secrets_key_vault_secret_config = (
+          try(local._credential_autogen_eligible[region][vm_key], false)
+          || try(local._credential_store_eligible[region][vm_key], false)
+        ) ? {
           key_vault_resource_id = local.regional_kv_resource_ids[region]
         } : try(vm.generated_secrets_key_vault_secret_config, null)
       })
