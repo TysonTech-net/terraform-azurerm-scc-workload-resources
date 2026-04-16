@@ -183,12 +183,23 @@ locals {
   }
 
   # VMs eligible for storing their password in Key Vault (have a password + KV enabled).
+  #
+  # Implicit default: any VM with an effective admin_password (explicit or via
+  # var.vm_admin_password env-injected fallback) automatically gets the password
+  # stored in the regional Key Vault when KV is deployed. This keeps credentials
+  # retrievable for operational access without requiring each VM to opt in.
+  #
+  # The `store_password_in_keyvault` flag remains supported for explicit override
+  # but defaults to `true` when unset — consumers must explicitly set it to
+  # `false` to suppress KV storage for a specific VM (e.g. ephemeral dev VMs
+  # where credential retrieval isn't needed).
   _credential_store_eligible = {
     for region, vms in local.compute_vms_with_resolved_subnets : region => {
       for vm_key, vm in vms : vm_key =>
-      contains(local._kv_enabled_regions, region)
+      var.compute_auto_credential_keyvault_enabled
+      && contains(local._kv_enabled_regions, region)
       && local._effective_admin_password[region][vm_key] != null
-      && try(vm.store_password_in_keyvault, false) == true
+      && try(vm.store_password_in_keyvault, true) == true
     }
   }
 

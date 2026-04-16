@@ -137,9 +137,13 @@ variable "compute" {
       }))
 
       # Authentication
-      admin_username                     = optional(string, "azureadmin")
-      admin_password                     = optional(string)
-      store_password_in_keyvault         = optional(bool, false) # When true, stores the explicit admin_password in Key Vault
+      admin_username = optional(string, "azureadmin")
+      admin_password = optional(string)
+      # When unset (default true), any VM with an explicit or env-injected admin_password
+      # automatically gets the password stored in the regional Key Vault for operational
+      # retrieval. Set to false to opt a specific VM out of KV credential storage
+      # (e.g. ephemeral dev VMs where credential retrieval isn't needed).
+      store_password_in_keyvault         = optional(bool, true)
       generate_admin_password_or_ssh_key = optional(bool)
 
       # Telemetry
