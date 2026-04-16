@@ -60,6 +60,30 @@ locals {
           })
         }
 
+        # AUM safety check bypass — required for VMs targeted by Azure Update
+        # Manager schedules (which is every TF-managed VM via the MaintenanceWindow
+        # tag + dynamic scope). Without this, the VM gets the AUM error:
+        #   "This machine has a schedule associated to it. Please select the
+        #    required patch orchestration option for the schedule to continue
+        #    patching your machine."
+        #
+        # Setting bypass_platform_safety_checks_on_user_schedule_enabled = true
+        # tells Azure to allow the VM to be patched on the customer-managed
+        # AUM schedule (rather than the platform-default schedule). Pairs with
+        # patch_mode = "AutomaticByPlatform" (already the SCC default in the
+        # VM object schema, except for VMs that explicitly opt out via
+        # patch_mode = "ImageDefault" — e.g. Tenable marketplace images).
+        #
+        # Per-VM override is supported: set bypass_platform_safety_checks_on_user_schedule_enabled
+        # explicitly to override. Default logic: enable bypass IF patch_mode is
+        # AutomaticByPlatform (the AUM-compatible mode). Skip bypass if the VM
+        # uses ImageDefault or another non-AUM mode (e.g. Tenable marketplace
+        # images that don't support AutomaticByPlatform).
+        bypass_platform_safety_checks_on_user_schedule_enabled = try(
+          vm.bypass_platform_safety_checks_on_user_schedule_enabled,
+          try(vm.patch_mode, "AutomaticByPlatform") == "AutomaticByPlatform"
+        )
+
         # Inject operational tags. Three categories are merged into vm.tags:
         #
         #   1. Maintenance window (conditional) — set only when vm.maintenance_window
