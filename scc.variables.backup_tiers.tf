@@ -1,5 +1,5 @@
 ###############################################################################
-# SCC Backup Tier + Operational Tag Variables
+# SCC Backup Policy + Operational Tag Variables
 ###############################################################################
 # Controls the SCC standard backup tier definitions (defined in
 # scc.locals.backup_tiers.tf) and the tag names used for operational
@@ -13,14 +13,13 @@ variable "deploy_scc_default_backup_policies" {
   type        = bool
   default     = true
   description = <<-DESCRIPTION
-Deploy SCC standard VM backup policy tiers (basic, standard, extended) into
-each deployed Recovery Services Vault. Names are auto-generated from the
+Deploy SCC standard VM backup policy definitions (basic, standard, extended)
+into each deployed Recovery Services Vault. Names are auto-generated from the
 CAF pattern: pol-rsv-<workload>-<env>-<tier>-<region>-<instance>.
 
 Defaults to true. Set false if your deployment uses customer-specific backup
-policies — in that case, supply your own tiers via
-var.management[region].management_backup_rsv_vm_backup_policy and override
-var.backup_policy_tiers with matching policy_name values.
+policies — supply your own via var.management[region].management_backup_rsv_vm_backup_policy
+and override var.backup_policy_names with your policy name list per region.
 
 When true, user-supplied policies merge with SCC defaults (user keys win on
 collision), so you can extend the default tier list with additional custom
@@ -32,9 +31,9 @@ variable "backup_policy_tag_name" {
   type        = string
   default     = "BackupPolicy"
   description = <<-DESCRIPTION
-Name of the VM tag that drives backup policy tier selection. SCC default is
+Name of the VM tag that drives backup policy selection. SCC default is
 'BackupPolicy'. Customers using different tag conventions can override
-(e.g. 'backup_tier', 'RetentionPolicy').
+(e.g. 'backup_policy', 'RetentionPolicy').
 
 Must match the tagName parameter on the subscription-level backup policy
 assignments (main.policy.backup.tf) and the Azure Policy Modify assignment
@@ -55,49 +54,53 @@ defined in alz-mgmt (.scc-maintenance.auto.tfvars).
 DESCRIPTION
 }
 
-variable "backup_policy_fallback_tier" {
-  type        = string
-  default     = "basic"
+variable "backup_policy_names" {
+  type        = map(list(string))
+  default     = null
   description = <<-DESCRIPTION
-Which backup tier to register VMs against when they don't have a valid
-BackupPolicy tag. The fallback subscription-level policy assignment uses
-the "without tag" variant (09ce66bc) and excludes all known tier tag
-values, so VMs with an invalid/missing tag get this tier as a safety net.
+Per-region list of backup policy names that should have a subscription-level
+Azure Policy assignment. The module creates one assignment per (region, policy_name)
+combination, each scoped by `<backup_policy_tag_name> = <policy_name>` — VMs
+tagged with the matching policy name are registered against that policy in
+the vault.
 
-Must match a key in var.backup_policy_tiers (or one of the SCC default
-keys: "basic", "standard", "extended"). Defaults to "basic".
+Tag value matches the policy name EXACTLY. This makes the model trivial for
+customers with N policies per region (no tier abstraction to maintain), at
+the cost of region-specific tag values when policy names include the region
+abbreviation (e.g. CAF naming).
+
+When null (default), the module auto-derives the list from the merged backup
+policies (SCC defaults + any user-supplied policies via var.management). To
+register only a subset of vault policies against subscription-level
+assignments, override with the explicit list.
+
+Example for a customer with two custom policies in uksouth:
+  backup_policy_names = {
+    uksouth = ["pol-myapp-prod-aggressive-uks-001", "pol-myapp-prod-relaxed-uks-001"]
+    ukwest  = ["pol-myapp-prod-aggressive-ukw-001", "pol-myapp-prod-relaxed-ukw-001"]
+  }
 DESCRIPTION
 }
 
-variable "backup_policy_tiers" {
-  type = map(object({
-    policy_name_per_region = optional(map(string))
-    policy_name            = optional(string)
-    description            = optional(string, "")
-  }))
+variable "backup_policy_fallback_name_per_region" {
+  type        = map(string)
   default     = null
   description = <<-DESCRIPTION
-Map of backup policy tiers for subscription-level policy assignments. Each
-entry:
-  - key: the value that VMs tag themselves with (via backup_policy on the VM
-    or the BackupPolicy tag directly) to select this tier
-  - policy_name_per_region (preferred): map of region -> backup policy name
-    in that region's vault. Use when policy names differ per region (e.g.
-    CAF naming with region abbreviation).
-  - policy_name (alternative): single backup policy name used across all
-    regions. Use when the same policy name exists in every vault.
-  - description: optional human-readable description surfaced in Azure
-    Portal and compliance views.
+Per-region backup policy name to register VMs against when they don't have
+a valid <backup_policy_tag_name> tag. The fallback subscription-level policy
+assignment uses the "without tag" variant (09ce66bc) and excludes all known
+policy names, so VMs with an invalid/missing tag get this policy as a safety
+net.
 
-When null (default), the module auto-derives tiers from the SCC standard
-CAF-named defaults (see scc.locals.backup_tiers.tf). The map key is the
-tier short name ("basic", "standard", "extended"), the policy_name_per_region
-is populated from the auto-generated CAF policy names.
+When null (default), uses the SCC `basic` tier policy for each region (the
+auto-generated CAF-named pol-rsv-<workload>-<env>-basic-<region>-<instance>).
+Override when using customer-specific policies — must match a policy name
+that exists in the vault for that region.
 
-Override when using customer-specific backup policies — the map keys become
-the allowed BackupPolicy tag values, and each entry's policy_name(_per_region)
-must match a policy that exists in the Recovery Services Vault. Misalignment
-(a tag value that doesn't match any entry, or an entry pointing at a
-non-existent policy) will cause remediation failures at apply time.
+Example:
+  backup_policy_fallback_name_per_region = {
+    uksouth = "pol-myapp-prod-default-uks-001"
+    ukwest  = "pol-myapp-prod-default-ukw-001"
+  }
 DESCRIPTION
 }

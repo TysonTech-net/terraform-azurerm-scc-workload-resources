@@ -74,27 +74,29 @@ locals {
         #      by default. Paired with the Enf-VM-Tag-* Audit assignments in
         #      alz-mgmt which validate values are "true" or "false".
         #
-        #   3. Backup policy tier (always) — drives subscription-level backup
-        #      policy assignments. Tag name is configurable via
-        #      var.backup_policy_tag_name (default "BackupPolicy"). Tag value
-        #      is the tier KEY from var.backup_policy_tiers (e.g. "basic",
-        #      "standard", "extended"), not the policy name. Override per-VM
-        #      via the `backup_policy` field.
+        #   3. Backup policy (conditional) — set only when vm.backup_policy is
+        #      specified. Tag value is the EXACT policy name as it exists in
+        #      the vault (e.g. "pol-rsv-identity-prod-basic-uks-001"). Drives
+        #      subscription-level backup policy assignments — VMs without the
+        #      tag fall through to the per-region fallback assignment. Tag
+        #      name is configurable via var.backup_policy_tag_name (default
+        #      "BackupPolicy").
         #
         # Merge order matters: later values override earlier ones. vm.tags
         # (user-supplied) comes first so explicit user tags take precedence
-        # over defaults, then operational tags. This means a VM can override
-        # sccosmanagement or BackupPolicy by setting it in its tags map.
+        # over defaults, then operational tags.
         tags = merge(
           coalesce(vm.tags, {}),
           try(vm.maintenance_window, null) != null ? {
             (var.maintenance_window_tag_name) = vm.maintenance_window
           } : {},
           {
-            sccosmanagement              = vm.sccosmanagement
-            sccnetworkmanagement         = vm.sccnetworkmanagement
+            sccosmanagement      = vm.sccosmanagement
+            sccnetworkmanagement = vm.sccnetworkmanagement
+          },
+          try(vm.backup_policy, null) != null ? {
             (var.backup_policy_tag_name) = vm.backup_policy
-          }
+          } : {}
         )
 
         # Resolve maintenance configuration (legacy explicit assignments):
