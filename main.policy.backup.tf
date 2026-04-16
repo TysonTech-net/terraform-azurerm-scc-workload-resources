@@ -65,8 +65,10 @@ locals {
   ]...)
 
   # Per-region fallback policy name. Uses customer override if supplied,
-  # otherwise the first SCC tier (basic) for that region. Skips regions
-  # where neither is available (no SCC defaults + no override).
+  # otherwise the SCC basic tier (SCC-BasicBackup) which is deployed into
+  # every vault. The constant name allows the alz-mgmt root-MG Modify policy
+  # to default the BackupPolicy tag to a predictable value that exists in
+  # any vault, regardless of workload/region.
   _effective_fallback_name_per_region = {
     for region, mgmt in var.management : region => (
       try(var.backup_policy_fallback_name_per_region[region], null) != null
