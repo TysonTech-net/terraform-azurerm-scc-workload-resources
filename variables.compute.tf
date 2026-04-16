@@ -261,6 +261,23 @@ variable "compute" {
       sccosmanagement      = optional(string, "true")
       sccnetworkmanagement = optional(string, "false")
 
+      # SCC Backup Policy Tier Selection
+      # Drives per-VM backup retention tier via the `BackupPolicy` tag. The
+      # subscription-level Azure Policy assignments in this module (see
+      # main.policy.backup.tf) deploy one DeployIfNotExists assignment per tier,
+      # each scoped to VMs with the matching BackupPolicy tag value. Changing
+      # the tag re-registers the VM against the new tier on the next policy
+      # evaluation cycle.
+      #
+      # Valid values (must match scc-workload-management's SCC standard policies):
+      #   - "SCC-BasicRetention"     : 30 days daily (dev/test, default)
+      #   - "SCC-StandardRetention"  : 14 daily + 4 weekly + 3 monthly (prod)
+      #   - "SCC-ExtendedRetention"  : 14 daily + 4 weekly + 12 monthly + 7 yearly (compliance)
+      #
+      # If unset, the Azure Policy Modify effect in alz-mgmt defaults the tag to
+      # SCC-BasicRetention on VMs created outside Terraform.
+      backup_policy = optional(string, "SCC-BasicRetention")
+
       # Tags
       tags = optional(map(string), {})
     })), {})

@@ -1,90 +1,194 @@
 ###############################################################################
-# Subscription-level VM Backup Policy Assignment
+# Subscription-level VM Backup Policy Assignments (Tag-Based Tier Selection)
 ###############################################################################
-# Auto-assigns VMs in the workload subscription to the existing Terraform-
-# managed Recovery Services Vault deployed by the management module. This
-# replaces the root-MG-level `Deploy-VM-Backup` policy assignment (ALZ library
-# ID 98d0b9f8-fd90-49c9-88e2-d3baf3b0dd86) which auto-creates a new vault per
-# resource group and fragments backup coverage.
+# One Azure Policy assignment per SCC backup tier. Each assignment targets
+# VMs tagged with `BackupPolicy = <tier>` and registers them for backup
+# against the matching policy in the existing Terraform-managed Recovery
+# Services Vault.
 #
-# Uses the built-in Azure policy:
-#   Name: Configure backup on virtual machines without a given tag to an
+# This replaces the single root-MG `Deploy-VM-Backup` assignment (ALZ library
+# ID 98d0b9f8) which created throwaway vaults per RG and offered no per-VM
+# retention control. Operators can now change a VM's retention by updating
+# its `BackupPolicy` tag — no Terraform change needed on apply, the policy
+# remediation will re-register the VM against the new tier.
+#
+# Uses built-in Azure policy:
+#   Name: Configure backup on virtual machines with a given tag to an
 #         existing recovery services vault in the same location
-#   ID:   09ce66bc-1220-4153-8104-e3f51c936913
-#   Variant: "existing vault, without tag" — backs up everything by default,
-#            optionally excludes VMs with a specified exclusion tag. The "with
-#            tag" variants (345fa903/83644c87) are inclusion-based and require
-#            tagging each VM to opt in.
+#   ID:   345fa903-145c-4fe1-8bcd-93ec2adccde8
+#   Variant: "existing vault, with tag" — only backs up VMs tagged to match.
+#            Pairs with Azure Policy Modify on `BackupPolicy` in alz-mgmt
+#            which defaults the tag to SCC-BasicRetention when missing.
 #
-# Scope: Deployed per region that has a backup vault. Each assignment points
-# at its regional vault (uksouth → rsv-backup-<workload>-prod-uks-001, etc).
-# Linux and Windows VMs are both covered by the built-in policy's image
-# filter (Windows Server, SQL Server, Ubuntu, RHEL, CentOS, Oracle Linux,
-# SUSE, etc).
+# Scope: Cartesian product of (region with backup vault) x (SCC backup tier).
+# For a dual-region deployment with all three tiers enabled: 6 assignments.
+# Names are bounded to 24 characters (Azure limit) via substr() on the tier key.
 #
-# Managed Identity: The policy's SystemAssigned identity is granted two roles
-# at the subscription scope:
-#   - Virtual Machine Contributor (9980e02c...) — to install the backup
-#     extension and perform restore operations on VMs
-#   - Backup Contributor (5e467623...) — to register VMs as protected items
-#     in the Recovery Services Vault
-#
-# Default backup policy: SCC-BasicRetention (baked into the vault by
-# scc-workload-management v1.1.0+). Override via var.vm_backup_policy_name if
-# a different tier is required (e.g. SCC-StandardRetention for production
-# workloads with mid-term retention requirements).
-#
-# Remediation: After apply, create a remediation task in the Azure Portal
-# (Policy → Remediation) to backfill backup registration on existing VMs
-# that were deployed before this assignment was in place. New VMs are
-# automatically protected within minutes of creation.
+# Managed Identity: Each assignment's SystemAssigned identity is granted:
+#   - Virtual Machine Contributor (9980e02c...) — install backup extension,
+#     perform restores
+#   - Backup Contributor (5e467623...) — register VMs as protected items
+# Both scoped to the subscription.
+###############################################################################
+
+locals {
+  # SCC backup tier keys (in scc-workload-management module) → policy names
+  # (in the vault). The map key is used in assignment names and as the
+  # value of the BackupPolicy tag; the policy_name is the actual resource
+  # inside the vault. These must match the names defined in
+  # scc-workload-management/scc.locals.backup_policies.tf.
+  scc_backup_tiers = {
+    basic = {
+      policy_name = "SCC-BasicRetention"
+      description = "Short-term retention (30 days daily). Dev/test workloads."
+    }
+    standard = {
+      policy_name = "SCC-StandardRetention"
+      description = "Mid-term retention (14 daily + 4 weekly + 3 monthly). Default production."
+    }
+    extended = {
+      policy_name = "SCC-ExtendedRetention"
+      description = "Long-term retention (14 daily + 4 weekly + 12 monthly + 7 yearly). Compliance workloads."
+    }
+  }
+
+  # Cartesian product of region x tier for subscription policy assignments.
+  # Only includes regions where a backup vault is deployed.
+  vm_backup_assignments = merge([
+    for region, mgmt in var.management : {
+      for tier_key, tier in local.scc_backup_tiers :
+      "${region}_${tier_key}" => {
+        region      = region
+        location    = mgmt.location
+        tier_key    = tier_key
+        policy_name = tier.policy_name
+        description = tier.description
+      }
+    }
+    if mgmt.deploy_management_backup_recovery_services_vault
+  ]...)
+}
+
+###############################################################################
+# Tier-Specific Backup Assignments (inclusion tag)
+###############################################################################
+# One assignment per (region × tier). VMs tagged BackupPolicy=<tier-name>
+# get registered against that tier's backup policy.
 ###############################################################################
 
 resource "azurerm_subscription_policy_assignment" "vm_backup" {
-  # One assignment per region that has a backup vault deployed. The filter
-  # uses `deploy_management_backup_recovery_services_vault` from var.management
-  # (known at plan time) rather than inspecting the module output (unknown
-  # on first plan, same reason as the credential autogen pattern in main.compute.tf).
-  for_each = {
-    for key, mgmt in var.management : key => mgmt
-    if mgmt.deploy_management_backup_recovery_services_vault
-  }
+  for_each = local.vm_backup_assignments
 
-  # Name must be ≤24 chars. Format: "deploy-vm-bkp-<region-key>".
-  # Region keys are typically short (e.g. "uksouth", "ukwest") so this fits.
-  # substr bounds the name defensively if a longer key is ever introduced.
-  name                 = "deploy-vm-bkp-${substr(each.key, 0, 10)}"
+  # Assignment name (≤24 chars). Format: "vm-bkp-<region-short>-<tier-short>".
+  # substr() bounds defensively if longer keys are introduced.
+  name                 = "vm-bkp-${substr(each.value.region, 0, 6)}-${substr(each.value.tier_key, 0, 8)}"
   subscription_id      = "/subscriptions/${var.subscription}"
-  policy_definition_id = "/providers/Microsoft.Authorization/policyDefinitions/09ce66bc-1220-4153-8104-e3f51c936913"
+  policy_definition_id = "/providers/Microsoft.Authorization/policyDefinitions/345fa903-145c-4fe1-8bcd-93ec2adccde8"
   location             = each.value.location
-  display_name         = "Configure VM backup to existing vault (${each.value.location})"
-  description          = "Backs up all VMs in this subscription to the existing Recovery Services Vault in ${each.value.location}. Uses the ${var.vm_backup_policy_name} backup policy tier."
+  display_name         = "Configure VM backup to ${each.value.policy_name} (${each.value.location})"
+  description          = "Backs up VMs tagged BackupPolicy=${each.value.policy_name} in ${each.value.location} to the existing Recovery Services Vault. ${each.value.description}"
 
   parameters = jsonencode({
-    # Required by the built-in policy: VMs in this region are backed up to
-    # a vault in the same region (backups can't cross regions).
+    # Required: VMs in this region are backed up to a vault in the same region.
     vaultLocation = {
       value = each.value.location
     }
-    # Full resource path to the VM backup policy in the vault. Constructed from
-    # the module output (known after apply) and the configured policy name.
-    # The vault resource ID is stable, so referencing it here doesn't introduce
-    # plan-time unknowns (the assignment itself depends on the vault existing).
-    backupPolicyId = {
-      value = "${module.workload_management[each.key].management_backup_rsv_resource_id[0]}/backupPolicies/${var.vm_backup_policy_name}"
+    # Tag-based inclusion: only VMs with `BackupPolicy = <tier policy name>`
+    # are registered by this assignment. The Modify policy in alz-mgmt
+    # (Add-Tag-VM-BkpPolicy) defaults missing tags to SCC-BasicRetention.
+    inclusionTagName = {
+      value = "BackupPolicy"
     }
-    # Empty exclusion tag = back up everything. Consumers can override via
-    # policy_assignments_to_modify in tfvars to exclude specific VMs (e.g.
-    # ephemeral scratch VMs, VMs with custom backup arrangements).
+    inclusionTagValue = {
+      value = [each.value.policy_name]
+    }
+    # Full resource path to the VM backup policy in the vault. Constructed from
+    # known inputs (subscription, RG, vault name) rather than module outputs to
+    # keep the value plan-time-known. Vault name comes from var.management — it's
+    # required for the backup vault to be deployed, so we can reference it directly.
+    backupPolicyId = {
+      value = format(
+        "/subscriptions/%s/resourceGroups/%s/providers/Microsoft.RecoveryServices/vaults/%s/backupPolicies/%s",
+        var.subscription,
+        var.management[each.value.region].management_resource_group_name,
+        var.management[each.value.region].management_backup_rsv_name,
+        each.value.policy_name
+      )
+    }
+    # DeployIfNotExists = auto-register matching VMs at creation. Audit flags
+    # non-compliance without registering. Disabled turns the policy off.
+    effect = {
+      value = "DeployIfNotExists"
+    }
+  })
+
+  identity {
+    type = "SystemAssigned"
+  }
+}
+
+###############################################################################
+# Fallback Backup Assignment (exclusion tag)
+###############################################################################
+# Safety net for VMs without a BackupPolicy tag. Registers them against the
+# default tier (SCC-BasicRetention) to ensure nothing slips through the cracks.
+#
+# Pairs with the Azure Policy Modify effect in alz-mgmt (Add-Tag-VM-BkpPolicy)
+# which defaults the tag to SCC-BasicRetention on VMs created outside Terraform.
+# But policy evaluation can lag VM creation by up to 30 minutes, so this
+# fallback ensures backup protection from the moment a VM is created, regardless
+# of whether the Modify has fired yet.
+#
+# Uses built-in "without tag" variant 09ce66bc-1220-4153-8104-e3f51c936913.
+# Exclusion tag set to BackupPolicy with the three valid tier values — meaning
+# ANY VM already tagged with a valid tier is excluded from this fallback and
+# handled by its tier-specific assignment above. Untagged VMs (or VMs with an
+# invalid tag value) get the Basic tier by default.
+###############################################################################
+
+locals {
+  # Fallback assignments: one per region with a vault, all using SCC-BasicRetention.
+  vm_backup_fallback_assignments = {
+    for region, mgmt in var.management : region => {
+      region   = region
+      location = mgmt.location
+    }
+    if mgmt.deploy_management_backup_recovery_services_vault
+  }
+}
+
+resource "azurerm_subscription_policy_assignment" "vm_backup_fallback" {
+  for_each = local.vm_backup_fallback_assignments
+
+  name                 = "vm-bkp-fallback-${substr(each.value.region, 0, 7)}"
+  subscription_id      = "/subscriptions/${var.subscription}"
+  policy_definition_id = "/providers/Microsoft.Authorization/policyDefinitions/09ce66bc-1220-4153-8104-e3f51c936913"
+  location             = each.value.location
+  display_name         = "Configure VM backup fallback to SCC-BasicRetention (${each.value.location})"
+  description          = "Registers VMs in ${each.value.location} without a valid BackupPolicy tag against SCC-BasicRetention. Tier-specific assignments (vm-bkp-<region>-<tier>) handle VMs tagged with a valid SCC retention tier. This assignment is the safety net for untagged VMs."
+
+  parameters = jsonencode({
+    vaultLocation = {
+      value = each.value.location
+    }
+    # Exclude VMs tagged with any valid tier — they're handled by the tier-specific
+    # assignments above. Anything else (no tag or invalid tag value) falls through
+    # to this assignment and gets SCC-BasicRetention.
     exclusionTagName = {
-      value = ""
+      value = "BackupPolicy"
     }
     exclusionTagValue = {
-      value = []
+      value = [for _, tier in local.scc_backup_tiers : tier.policy_name]
     }
-    # DeployIfNotExists = auto-register new VMs at creation time. Audit would
-    # flag non-compliance but not register. Disabled turns the policy off
-    # entirely (use `enforcement_mode` instead if you want tag history retained).
+    backupPolicyId = {
+      value = format(
+        "/subscriptions/%s/resourceGroups/%s/providers/Microsoft.RecoveryServices/vaults/%s/backupPolicies/%s",
+        var.subscription,
+        var.management[each.value.region].management_resource_group_name,
+        var.management[each.value.region].management_backup_rsv_name,
+        local.scc_backup_tiers.basic.policy_name
+      )
+    }
     effect = {
       value = "DeployIfNotExists"
     }
@@ -98,38 +202,37 @@ resource "azurerm_subscription_policy_assignment" "vm_backup" {
 ###############################################################################
 # Policy Managed Identity Role Assignments
 ###############################################################################
-# The built-in policy's DeployIfNotExists effect runs a deployment that both
-# (a) modifies the VM to install the backup extension, and
-# (b) registers the VM as a protected item in the vault.
-# Both require specific roles at the subscription scope. The AVM ALZ module
-# handles this automatically for root-MG policies, but subscription-level
-# assignments created outside that module need explicit role assignments.
-#
+# One set of role assignments per policy assignment (subscription-scoped).
 # Role IDs sourced from the built-in policy's roleDefinitionIds in the Azure
-# Policy GitHub repo (policyDefinitions/Backup/VirtualMachineBackup_DINE.json).
+# Policy GitHub repo (policyDefinitions/Backup/VirtualMachineWithTag_DINE.json).
 ###############################################################################
 
-# Virtual Machine Contributor — needed to install the backup extension on VMs
-# and to initiate restore operations. Broader than strictly necessary for
-# backup registration alone, but matches the built-in policy's requirements.
+# Combined set of all backup policy assignments (tier-specific + fallback)
+# needing role assignments. Keyed by the same key the source resource uses
+# so role assignment keys are predictable.
+locals {
+  all_vm_backup_assignment_identities = merge(
+    { for k, a in azurerm_subscription_policy_assignment.vm_backup : "tier-${k}" => a.identity[0].principal_id },
+    { for k, a in azurerm_subscription_policy_assignment.vm_backup_fallback : "fallback-${k}" => a.identity[0].principal_id }
+  )
+}
+
+# Virtual Machine Contributor — install backup extension, perform restores.
 resource "azurerm_role_assignment" "vm_backup_policy_vm_contributor" {
-  for_each = azurerm_subscription_policy_assignment.vm_backup
+  for_each = local.all_vm_backup_assignment_identities
 
   scope                            = "/subscriptions/${var.subscription}"
   role_definition_id               = "/providers/Microsoft.Authorization/roleDefinitions/9980e02c-c2be-4d73-94e8-173b1dc7cf3c"
-  principal_id                     = each.value.identity[0].principal_id
+  principal_id                     = each.value
   skip_service_principal_aad_check = true
 }
 
-# Backup Contributor — needed to register VMs as protected items in the vault
-# and to configure the backup policy association. Scoped to the subscription
-# rather than the vault RG so the identity can operate across all vaults that
-# might be in the subscription (though typically one per region).
+# Backup Contributor — register VMs as protected items in the vault.
 resource "azurerm_role_assignment" "vm_backup_policy_backup_contributor" {
-  for_each = azurerm_subscription_policy_assignment.vm_backup
+  for_each = local.all_vm_backup_assignment_identities
 
   scope                            = "/subscriptions/${var.subscription}"
   role_definition_id               = "/providers/Microsoft.Authorization/roleDefinitions/5e467623-bb1f-42f4-a55d-6e525e11384b"
-  principal_id                     = each.value.identity[0].principal_id
+  principal_id                     = each.value
   skip_service_principal_aad_check = true
 }
