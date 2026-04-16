@@ -261,28 +261,31 @@ variable "compute" {
       sccosmanagement      = optional(string, "true")
       sccnetworkmanagement = optional(string, "false")
 
-      # Backup Policy Tier Selection
-      # Drives per-VM backup retention tier via the BackupPolicy tag (tag name
-      # is configurable via var.backup_policy_tag_name on the module). The
+      # Backup Policy Selection
+      # Drives per-VM backup policy via the BackupPolicy tag (tag name is
+      # configurable via var.backup_policy_tag_name on the module). The
       # subscription-level Azure Policy assignments in this module (see
-      # main.policy.backup.tf) deploy one DeployIfNotExists assignment per tier,
-      # each scoped to VMs with the matching tag value. Changing the tag
-      # re-registers the VM against the new tier on the next policy evaluation.
+      # main.policy.backup.tf) deploy one DeployIfNotExists assignment per
+      # (region, policy_name) combination, each scoped to VMs with the matching
+      # tag value. Changing the tag re-registers the VM against the new policy
+      # on the next policy evaluation.
       #
-      # Valid values match the keys in var.backup_policy_tiers (or the SCC
-      # defaults when deploy_scc_default_backup_policies is true):
-      #   - "basic"    : 30 days daily (dev/test, default)
-      #   - "standard" : 14 daily + 4 weekly + 3 monthly (production)
-      #   - "extended" : 14 daily + 4 weekly + 12 monthly + 7 yearly (compliance)
+      # Tag value is the EXACT policy name as it exists in the vault (no
+      # abstraction layer). For SCC defaults with CAF naming, this means
+      # region-specific values like:
+      #   - "pol-rsv-<workload>-<env>-basic-<region>-<instance>"     (30d daily)
+      #   - "pol-rsv-<workload>-<env>-standard-<region>-<instance>"  (14d + 4w + 3m)
+      #   - "pol-rsv-<workload>-<env>-extended-<region>-<instance>"  (14d + 4w + 12m + 7y)
       #
-      # The tag value is the tier KEY, not the policy name. This keeps tags
-      # portable across regions (policy names include region abbreviation via
-      # CAF naming). The module translates tier key → region-specific policy
-      # name when constructing the subscription policy assignment's backupPolicyId.
+      # Examples (identity workload, prod, instance 001):
+      #   uksouth basic    : "pol-rsv-identity-prod-basic-uks-001"
+      #   ukwest standard  : "pol-rsv-identity-prod-standard-ukw-001"
       #
-      # If unset, the Azure Policy Modify effect in alz-mgmt defaults the tag
-      # to the configured fallback tier on VMs created outside Terraform.
-      backup_policy = optional(string, "basic")
+      # If unset, the per-region fallback assignment registers the VM against
+      # the configured fallback policy (default: SCC basic tier for the region).
+      # The Modify policy in alz-mgmt also defaults the BackupPolicy tag on
+      # VMs created outside Terraform.
+      backup_policy = optional(string)
 
       # Tags
       tags = optional(map(string), {})

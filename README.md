@@ -28,25 +28,29 @@ module "workload_resources" {
 - Tag-based subscription-level VM backup policy assignments (one per SCC backup tier + fallback for untagged VMs). Change the `BackupPolicy` tag value to move a VM between retention tiers.
 - VM tag injection for operational tagging: `MaintenanceWindow` (Update Manager dynamic scoping), `sccosmanagement`/`sccnetworkmanagement` (Logic Monitor collector assignment), `BackupPolicy` (backup retention tier selection).
 
-## VM Backup Tier Selection
+## VM Backup Policy Selection
 
-Set `backup_policy` on a VM to choose its retention tier (tier KEY, not policy name). Tag-based Azure Policy assignments register the VM against the matching backup policy in the vault:
+Set `backup_policy` on a VM to the exact name of the backup policy you want it registered against. The tag value matches the policy name in the vault — no abstraction layer. This trivially supports customers with N policies per region.
 
-| `backup_policy` value | Daily | Weekly | Monthly | Yearly | Use case |
-|---|---|---|---|---|---|
-| `basic` (default) | 30 days | — | — | — | Dev/test |
-| `standard` | 14 days | 4 weeks | 3 months | — | Default prod |
-| `extended` | 14 days | 4 weeks | 12 months | 7 years | Compliance |
+SCC standard policies are deployed into each vault with CAF-auto-generated names: `pol-rsv-<workload>-<env>-<tier>-<region>-<instance>`. The three default tiers:
 
-A fallback assignment catches VMs without a valid tier tag and registers them against the tier configured by `var.backup_policy_fallback_tier` (default `basic`), ensuring nothing escapes backup.
+| Tier | CAF policy name | Daily | Weekly | Monthly | Yearly | Use case |
+|---|---|---|---|---|---|---|
+| basic | `pol-rsv-<workload>-<env>-basic-<region>-001` | 30 days | — | — | — | Dev/test (default fallback) |
+| standard | `pol-rsv-<workload>-<env>-standard-<region>-001` | 14 days | 4 weeks | 3 months | — | Production |
+| extended | `pol-rsv-<workload>-<env>-extended-<region>-001` | 14 days | 4 weeks | 12 months | 7 years | Compliance |
 
-SCC standard policies are deployed into each vault with CAF-auto-generated names: `pol-rsv-<workload>-<env>-<tier>-<region>-<instance>` (e.g. `pol-rsv-identity-prod-basic-uks-001`). Toggle via `var.deploy_scc_default_backup_policies`.
+Example VM tag value (identity workload, prod, instance 001, uksouth, basic): `pol-rsv-identity-prod-basic-uks-001`.
+
+A fallback assignment catches VMs without a valid `BackupPolicy` tag and registers them against the per-region fallback policy (default: SCC basic tier for the region; configurable via `var.backup_policy_fallback_name_per_region`).
+
+Toggle SCC defaults via `var.deploy_scc_default_backup_policies`.
 
 ### Customising
 
 - **Different tag name**: set `var.backup_policy_tag_name` (default `"BackupPolicy"`) — also update the Modify/Audit assignments in alz-mgmt to match.
-- **Different tiers**: set `var.backup_policy_tiers` with your own `{ key = { policy_name_per_region = {...} } }` map. Works alongside `deploy_scc_default_backup_policies = false` if you're deploying your own backup policies via `management_backup_rsv_vm_backup_policy`.
-- **Different fallback tier**: set `var.backup_policy_fallback_tier` to any key from the tier map.
+- **Different policies**: disable SCC defaults (`deploy_scc_default_backup_policies = false`), supply your own via `management.<region>.management_backup_rsv_vm_backup_policy`, and override `var.backup_policy_names` with the per-region list of policy names that need subscription-level assignments.
+- **Different fallback policy**: set `var.backup_policy_fallback_name_per_region` to a per-region map of policy names.
 - **Different maintenance window tag**: set `var.maintenance_window_tag_name` (default `"MaintenanceWindow"`).
 
 ## VM Credential Paths
