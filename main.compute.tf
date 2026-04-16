@@ -79,9 +79,16 @@ locals {
         # AutomaticByPlatform (the AUM-compatible mode). Skip bypass if the VM
         # uses ImageDefault or another non-AUM mode (e.g. Tenable marketplace
         # images that don't support AutomaticByPlatform).
-        bypass_platform_safety_checks_on_user_schedule_enabled = try(
-          vm.bypass_platform_safety_checks_on_user_schedule_enabled,
-          try(vm.patch_mode, "AutomaticByPlatform") == "AutomaticByPlatform"
+        #
+        # Note: explicit null-check rather than try() because the field is declared
+        # as optional(bool) on the var.compute schema — when unset, it's null,
+        # which try() returns as-is rather than falling through to the fallback.
+        # We need the fallback to fire for the common case where the field is
+        # not explicitly set.
+        bypass_platform_safety_checks_on_user_schedule_enabled = (
+          try(vm.bypass_platform_safety_checks_on_user_schedule_enabled, null) != null
+          ? vm.bypass_platform_safety_checks_on_user_schedule_enabled
+          : try(vm.patch_mode, "AutomaticByPlatform") == "AutomaticByPlatform"
         )
 
         # Inject operational tags. Three categories are merged into vm.tags:
