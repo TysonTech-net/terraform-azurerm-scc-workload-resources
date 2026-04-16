@@ -164,6 +164,11 @@ variable "compute" {
       patch_mode               = optional(string, "AutomaticByPlatform")
       patch_assessment_mode    = optional(string, "AutomaticByPlatform")
       enable_automatic_updates = optional(bool, true)
+      # Required for AUM customer-managed schedules. Defaults to true via the
+      # tag injection logic in main.compute.tf (every TF-managed VM is targeted
+      # by AUM dynamic scopes via MaintenanceWindow tag). Set explicitly to
+      # false to opt a VM out of AUM scheduling.
+      bypass_platform_safety_checks_on_user_schedule_enabled = optional(bool)
       hotpatching_enabled      = optional(bool, false)
 
       # Boot Diagnostics
