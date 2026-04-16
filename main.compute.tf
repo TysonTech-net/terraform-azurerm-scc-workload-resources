@@ -128,11 +128,34 @@ locals {
     if try(config.deploy_management_key_vault, false)
   ])
 
-  # Map of region -> Key Vault resource ID from the management module.
-  # Only populated for regions where Key Vault was deployed.
+  # Map of region -> Key Vault resource ID.
+  #
+  # Constructed as a plan-time-known string from var.subscription, the management
+  # resource group name, and the Key Vault name rather than referencing the
+  # module output. This avoids an "Invalid count argument" error in the AVM VM
+  # module's azurerm_key_vault_secret resources, whose `count` depends on
+  # whether `generated_secrets_key_vault_secret_config` is non-null. The module
+  # output is unknown on first plan (the vault doesn't exist yet), which makes
+  # the non-null check indeterminate. Constructing the ID from inputs keeps it
+  # known at plan time; at apply time the value resolves to the same real
+  # resource so no drift is introduced.
+  #
+  # The KV name matches the construction in main.management.tf line 67:
+  # coalesce(each.value.management_kv_name, "{kv_base}{random4}{instance}").
+  # When management_kv_name is explicit, that wins. Otherwise we use the same
+  # naming logic (which depends on random_string.key_vault_suffix — stable
+  # across plans once created).
   regional_kv_resource_ids = {
     for region in local._kv_enabled_regions :
-    region => try(module.workload_management[region].management_kv_resource_id[0], null)
+    region => format(
+      "/subscriptions/%s/resourceGroups/%s/providers/Microsoft.KeyVault/vaults/%s",
+      var.subscription,
+      var.management[region].management_resource_group_name,
+      coalesce(
+        var.management[region].management_kv_name,
+        "${local.naming.key_vault_base[var.management[region].location]}${random_string.key_vault_suffix[region].result}${var.naming.instance}"
+      )
+    )
   }
 
   # Resolve effective admin_password per VM:
@@ -144,33 +167,26 @@ locals {
   }
 
   # VMs eligible for auto-generated credentials (no password available at all).
-  # Linux VMs are excluded: they authenticate via SSH keys (handled separately by
-  # the AVM VM module via tls_private_key). Forcing the auto-credential KV path on
-  # Linux VMs triggers an "Invalid count argument" error in the AVM module's
-  # azurerm_key_vault_secret.admin_ssh_key resource because `ssh_secret_count`
-  # depends on whether generated_secrets_key_vault_secret_config was passed, and
-  # that config references a KV resource ID which is unknown until apply.
-  # Keeping the path Windows-only avoids the plan-time indeterminate count.
+  # Applies to both Windows and Linux — the AVM VM module handles OS-specific
+  # generation (random password for Windows, tls_private_key SSH key for Linux)
+  # and stores both in the Key Vault via `generated_secrets_key_vault_secret_config`.
+  # The plan-time count ambiguity that previously affected Linux VMs is resolved
+  # by constructing regional_kv_resource_ids as a plan-time-known string above.
   _credential_autogen_eligible = {
     for region, vms in local.compute_vms_with_resolved_subnets : region => {
       for vm_key, vm in vms : vm_key =>
       var.compute_auto_credential_keyvault_enabled
       && contains(local._kv_enabled_regions, region)
-      && lower(try(vm.os_type, "Windows")) == "windows" # skip Linux VMs — see comment above
       && local._effective_admin_password[region][vm_key] == null
       && try(vm.generated_secrets_key_vault_secret_config, null) == null
     }
   }
 
   # VMs eligible for storing their password in Key Vault (have a password + KV enabled).
-  # Windows-only for the same reason as _credential_autogen_eligible: injecting
-  # `generated_secrets_key_vault_secret_config` on Linux VMs triggers the AVM
-  # module's SSH secret count ambiguity at plan time.
   _credential_store_eligible = {
     for region, vms in local.compute_vms_with_resolved_subnets : region => {
       for vm_key, vm in vms : vm_key =>
       contains(local._kv_enabled_regions, region)
-      && lower(try(vm.os_type, "Windows")) == "windows"
       && local._effective_admin_password[region][vm_key] != null
       && try(vm.store_password_in_keyvault, false) == true
     }
