@@ -60,7 +60,7 @@ locals {
           })
         }
 
-        # Inject operational tags. Three categories are merged into vm.tags:
+        # Inject operational tags. Four categories are merged into vm.tags:
         #
         #   1. MaintenanceWindow (conditional) — set only when vm.maintenance_window
         #      is specified. Drives Azure Update Manager dynamic scope assignment
@@ -69,11 +69,18 @@ locals {
         #   2. sccosmanagement / sccnetworkmanagement (always) — SCC Logic Monitor
         #      collector flags. Default to "true"/"false" respectively (set in the
         #      vm object type). Terraform-managed VMs are SCC-managed by default.
-        #      These match the Azure Policy Deny assignments defined in alz-mgmt
-        #      (Enf-VM-Tag-SccOsMgmt / Enf-VM-Tag-SccNetMgmt) which enforce that
-        #      only "true" or "false" values are valid.
+        #      Paired with the Azure Policy Enf-VM-Tag-* Audit assignments defined
+        #      in alz-mgmt which validate values are "true" or "false".
         #
-        # The merge order matters: later values override earlier ones. vm.tags
+        #   3. BackupPolicy (always) — SCC backup retention tier selector. Drives
+        #      the subscription-level backup policy assignments (see
+        #      main.policy.backup.tf) which use the built-in "with tag" variant
+        #      345fa903 to register VMs against the matching backup policy in the
+        #      vault. Default value SCC-BasicRetention; override per-VM via the
+        #      `backup_policy` field in compute tfvars for VMs needing standard
+        #      or extended retention.
+        #
+        # Merge order matters: later values override earlier ones. vm.tags
         # (user-supplied) comes first so we don't override explicit user tags with
         # our defaults, then MaintenanceWindow, then SCC tags last so SCC tags
         # can't be accidentally overridden by a clashing user tag.
@@ -85,6 +92,7 @@ locals {
           {
             sccosmanagement      = vm.sccosmanagement
             sccnetworkmanagement = vm.sccnetworkmanagement
+            BackupPolicy         = vm.backup_policy
           }
         )
 
