@@ -32,40 +32,84 @@
 ###############################################################################
 
 locals {
-  # SCC backup tier keys (in scc-workload-management module) → policy names
-  # (in the vault). The map key is used in assignment names and as the
-  # value of the BackupPolicy tag; the policy_name is the actual resource
-  # inside the vault. These must match the names defined in
-  # scc-workload-management/scc.locals.backup_policies.tf.
-  scc_backup_tiers = {
+  # Effective backup policy tiers. Three modes:
+  #
+  #   1. var.backup_policy_tiers is set (customer override) — use as-is.
+  #      Each tier's policy_name_per_region (or single policy_name) must
+  #      match a policy that exists in the vault. Tier keys become the
+  #      valid BackupPolicy tag values.
+  #
+  #   2. var.backup_policy_tiers is null AND deploy_scc_default_backup_policies
+  #      is true — derive tiers from SCC CAF-named defaults (scc.locals.backup_tiers.tf).
+  #      Policy names are auto-generated per region following the CAF pattern
+  #      pol-rsv-<workload>-<env>-<tier>-<region>-<instance>.
+  #
+  #   3. var.backup_policy_tiers is null AND deploy_scc_default_backup_policies
+  #      is false — empty map, no backup policy assignments are created.
+  #      Consumers using this combination should deploy their own backup
+  #      policy assignments separately (or use mode 1 above).
+  # Auto-derived SCC tier map (used when var.backup_policy_tiers is null
+  # and SCC defaults are enabled). Unconditional definition avoids the
+  # "inconsistent conditional result types" error that a ternary branching
+  # on {} would trigger — we filter below instead.
+  _scc_tiers_auto = {
     basic = {
-      policy_name = "SCC-BasicRetention"
-      description = "Short-term retention (30 days daily). Dev/test workloads."
+      policy_name_per_region = { for region, names in local.scc_tier_policy_names : region => names.basic }
+      description            = "SCC-BasicRetention: 30 days daily. Dev/test workloads."
     }
     standard = {
-      policy_name = "SCC-StandardRetention"
-      description = "Mid-term retention (14 daily + 4 weekly + 3 monthly). Default production."
+      policy_name_per_region = { for region, names in local.scc_tier_policy_names : region => names.standard }
+      description            = "SCC-StandardRetention: 14 daily + 4 weekly + 3 monthly. Default production."
     }
     extended = {
-      policy_name = "SCC-ExtendedRetention"
-      description = "Long-term retention (14 daily + 4 weekly + 12 monthly + 7 yearly). Compliance workloads."
+      policy_name_per_region = { for region, names in local.scc_tier_policy_names : region => names.extended }
+      description            = "SCC-ExtendedRetention: 14 daily + 4 weekly + 12 monthly + 7 yearly. Compliance workloads."
+    }
+  }
+
+  # SCC defaults, gated by the toggle. When disabled, empty map.
+  _scc_tiers_enabled = {
+    for k, v in local._scc_tiers_auto : k => v
+    if var.deploy_scc_default_backup_policies
+  }
+
+  # Effective tiers: prefer explicit var.backup_policy_tiers override (customer
+  # supplied) over SCC auto-derived tiers. When both are null/empty, no backup
+  # policy assignments are created.
+  _effective_backup_tiers = coalesce(
+    var.backup_policy_tiers,
+    local._scc_tiers_enabled
+  )
+
+  # Helper to resolve a tier's policy name for a given region. Prefers
+  # policy_name_per_region (explicit per-region mapping) over policy_name
+  # (single name used everywhere). Returns null if neither set.
+  _tier_policy_name_for_region = {
+    for tier_key, tier in local._effective_backup_tiers : tier_key => {
+      for region, mgmt in var.management : region => (
+        try(tier.policy_name_per_region[region], null) != null
+        ? tier.policy_name_per_region[region]
+        : tier.policy_name
+      )
     }
   }
 
   # Cartesian product of region x tier for subscription policy assignments.
-  # Only includes regions where a backup vault is deployed.
+  # Only includes regions where a backup vault is deployed AND the tier has
+  # a resolvable policy name for that region.
   vm_backup_assignments = merge([
     for region, mgmt in var.management : {
-      for tier_key, tier in local.scc_backup_tiers :
+      for tier_key, tier in local._effective_backup_tiers :
       "${region}_${tier_key}" => {
         region      = region
         location    = mgmt.location
         tier_key    = tier_key
-        policy_name = tier.policy_name
-        description = tier.description
+        policy_name = local._tier_policy_name_for_region[tier_key][region]
+        description = try(tier.description, "")
       }
+      if mgmt.deploy_management_backup_recovery_services_vault
+      && local._tier_policy_name_for_region[tier_key][region] != null
     }
-    if mgmt.deploy_management_backup_recovery_services_vault
   ]...)
 }
 
@@ -85,22 +129,26 @@ resource "azurerm_subscription_policy_assignment" "vm_backup" {
   subscription_id      = "/subscriptions/${var.subscription}"
   policy_definition_id = "/providers/Microsoft.Authorization/policyDefinitions/345fa903-145c-4fe1-8bcd-93ec2adccde8"
   location             = each.value.location
-  display_name         = "Configure VM backup to ${each.value.policy_name} (${each.value.location})"
-  description          = "Backs up VMs tagged BackupPolicy=${each.value.policy_name} in ${each.value.location} to the existing Recovery Services Vault. ${each.value.description}"
+  display_name         = "Configure VM backup (${each.value.tier_key} tier, ${each.value.location})"
+  description          = "Backs up VMs tagged ${var.backup_policy_tag_name}=${each.value.tier_key} in ${each.value.location} to the ${each.value.policy_name} policy in the existing Recovery Services Vault. ${each.value.description}"
 
   parameters = jsonencode({
     # Required: VMs in this region are backed up to a vault in the same region.
     vaultLocation = {
       value = each.value.location
     }
-    # Tag-based inclusion: only VMs with `BackupPolicy = <tier policy name>`
-    # are registered by this assignment. The Modify policy in alz-mgmt
-    # (Add-Tag-VM-BkpPolicy) defaults missing tags to SCC-BasicRetention.
+    # Tag-based inclusion: only VMs with `<tag_name> = <tier_key>` are
+    # registered by this assignment. Tag value is the tier KEY (e.g. "basic")
+    # not the policy name — this keeps tag values portable across regions
+    # (policy names differ per region via CAF naming). The module translates
+    # tag value → region-specific policy name via var.backup_policy_tiers.
+    # The Modify policy in alz-mgmt (Add-Tag-VM-BkpPolicy) defaults missing
+    # tags to the configured fallback tier key.
     inclusionTagName = {
-      value = "BackupPolicy"
+      value = var.backup_policy_tag_name
     }
     inclusionTagValue = {
-      value = [each.value.policy_name]
+      value = [each.value.tier_key]
     }
     # Full resource path to the VM backup policy in the vault. Constructed from
     # known inputs (subscription, RG, vault name) rather than module outputs to
@@ -147,14 +195,34 @@ resource "azurerm_subscription_policy_assignment" "vm_backup" {
 ###############################################################################
 
 locals {
-  # Fallback assignments: one per region with a vault, all using SCC-BasicRetention.
-  vm_backup_fallback_assignments = {
+  # Fallback assignments: one per region with a vault. Uses the tier identified
+  # by var.backup_policy_fallback_tier (default "basic") as the backup target.
+  # Excludes VMs tagged with ANY valid tier value so they flow to their
+  # tier-specific assignment instead.
+  #
+  # Only created when there's at least one tier defined. If
+  # local._effective_backup_tiers is empty (both SCC defaults disabled AND
+  # var.backup_policy_tiers null), no fallback is needed either.
+  vm_backup_fallback_assignments = length(local._effective_backup_tiers) > 0 ? {
     for region, mgmt in var.management : region => {
       region   = region
       location = mgmt.location
+      # Resolve the fallback tier's policy name for this region. Pulls from
+      # _tier_policy_name_for_region populated above, using the fallback tier key.
+      fallback_policy_name = try(
+        local._tier_policy_name_for_region[var.backup_policy_fallback_tier][region],
+        null
+      )
     }
     if mgmt.deploy_management_backup_recovery_services_vault
-  }
+    && try(local._tier_policy_name_for_region[var.backup_policy_fallback_tier][region], null) != null
+  } : {}
+
+  # All valid tier tag values across all regions — used to build the exclusion
+  # list for the fallback assignment. A VM is excluded from fallback if it has
+  # the BackupPolicy tag set to ANY known tier key. Anything else (no tag,
+  # typo'd tag value) falls through and gets the fallback tier.
+  _all_tier_tag_values = keys(local._effective_backup_tiers)
 }
 
 resource "azurerm_subscription_policy_assignment" "vm_backup_fallback" {
@@ -164,8 +232,8 @@ resource "azurerm_subscription_policy_assignment" "vm_backup_fallback" {
   subscription_id      = "/subscriptions/${var.subscription}"
   policy_definition_id = "/providers/Microsoft.Authorization/policyDefinitions/09ce66bc-1220-4153-8104-e3f51c936913"
   location             = each.value.location
-  display_name         = "Configure VM backup fallback to SCC-BasicRetention (${each.value.location})"
-  description          = "Registers VMs in ${each.value.location} without a valid BackupPolicy tag against SCC-BasicRetention. Tier-specific assignments (vm-bkp-<region>-<tier>) handle VMs tagged with a valid SCC retention tier. This assignment is the safety net for untagged VMs."
+  display_name         = "Configure VM backup fallback to ${each.value.fallback_policy_name} (${each.value.location})"
+  description          = "Registers VMs in ${each.value.location} without a valid ${var.backup_policy_tag_name} tag against the ${var.backup_policy_fallback_tier} tier (${each.value.fallback_policy_name}). Tier-specific assignments handle VMs tagged with a valid tier value. This assignment is the safety net for untagged VMs."
 
   parameters = jsonencode({
     vaultLocation = {
@@ -173,12 +241,12 @@ resource "azurerm_subscription_policy_assignment" "vm_backup_fallback" {
     }
     # Exclude VMs tagged with any valid tier — they're handled by the tier-specific
     # assignments above. Anything else (no tag or invalid tag value) falls through
-    # to this assignment and gets SCC-BasicRetention.
+    # to this assignment and gets the fallback tier.
     exclusionTagName = {
-      value = "BackupPolicy"
+      value = var.backup_policy_tag_name
     }
     exclusionTagValue = {
-      value = [for _, tier in local.scc_backup_tiers : tier.policy_name]
+      value = local._all_tier_tag_values
     }
     backupPolicyId = {
       value = format(
@@ -186,7 +254,7 @@ resource "azurerm_subscription_policy_assignment" "vm_backup_fallback" {
         var.subscription,
         var.management[each.value.region].management_resource_group_name,
         var.management[each.value.region].management_backup_rsv_name,
-        local.scc_backup_tiers.basic.policy_name
+        each.value.fallback_policy_name
       )
     }
     effect = {

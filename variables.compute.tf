@@ -261,22 +261,28 @@ variable "compute" {
       sccosmanagement      = optional(string, "true")
       sccnetworkmanagement = optional(string, "false")
 
-      # SCC Backup Policy Tier Selection
-      # Drives per-VM backup retention tier via the `BackupPolicy` tag. The
+      # Backup Policy Tier Selection
+      # Drives per-VM backup retention tier via the BackupPolicy tag (tag name
+      # is configurable via var.backup_policy_tag_name on the module). The
       # subscription-level Azure Policy assignments in this module (see
       # main.policy.backup.tf) deploy one DeployIfNotExists assignment per tier,
-      # each scoped to VMs with the matching BackupPolicy tag value. Changing
-      # the tag re-registers the VM against the new tier on the next policy
-      # evaluation cycle.
+      # each scoped to VMs with the matching tag value. Changing the tag
+      # re-registers the VM against the new tier on the next policy evaluation.
       #
-      # Valid values (must match scc-workload-management's SCC standard policies):
-      #   - "SCC-BasicRetention"     : 30 days daily (dev/test, default)
-      #   - "SCC-StandardRetention"  : 14 daily + 4 weekly + 3 monthly (prod)
-      #   - "SCC-ExtendedRetention"  : 14 daily + 4 weekly + 12 monthly + 7 yearly (compliance)
+      # Valid values match the keys in var.backup_policy_tiers (or the SCC
+      # defaults when deploy_scc_default_backup_policies is true):
+      #   - "basic"    : 30 days daily (dev/test, default)
+      #   - "standard" : 14 daily + 4 weekly + 3 monthly (production)
+      #   - "extended" : 14 daily + 4 weekly + 12 monthly + 7 yearly (compliance)
       #
-      # If unset, the Azure Policy Modify effect in alz-mgmt defaults the tag to
-      # SCC-BasicRetention on VMs created outside Terraform.
-      backup_policy = optional(string, "SCC-BasicRetention")
+      # The tag value is the tier KEY, not the policy name. This keeps tags
+      # portable across regions (policy names include region abbreviation via
+      # CAF naming). The module translates tier key → region-specific policy
+      # name when constructing the subscription policy assignment's backupPolicyId.
+      #
+      # If unset, the Azure Policy Modify effect in alz-mgmt defaults the tag
+      # to the configured fallback tier on VMs created outside Terraform.
+      backup_policy = optional(string, "basic")
 
       # Tags
       tags = optional(map(string), {})

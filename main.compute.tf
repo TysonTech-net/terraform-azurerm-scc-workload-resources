@@ -60,39 +60,40 @@ locals {
           })
         }
 
-        # Inject operational tags. Four categories are merged into vm.tags:
+        # Inject operational tags. Three categories are merged into vm.tags:
         #
-        #   1. MaintenanceWindow (conditional) — set only when vm.maintenance_window
-        #      is specified. Drives Azure Update Manager dynamic scope assignment
-        #      without needing explicit maintenance_configuration_resource_ids.
+        #   1. Maintenance window (conditional) — set only when vm.maintenance_window
+        #      is specified. Drives Azure Update Manager dynamic scope assignment.
+        #      Tag name is configurable via var.maintenance_window_tag_name
+        #      (default "MaintenanceWindow"). Pairs with maintenance configs in
+        #      alz-mgmt (.scc-maintenance.auto.tfvars).
         #
-        #   2. sccosmanagement / sccnetworkmanagement (always) — SCC Logic Monitor
-        #      collector flags. Default to "true"/"false" respectively (set in the
-        #      vm object type). Terraform-managed VMs are SCC-managed by default.
-        #      Paired with the Azure Policy Enf-VM-Tag-* Audit assignments defined
-        #      in alz-mgmt which validate values are "true" or "false".
+        #   2. SCC Logic Monitor flags (always) — sccosmanagement,
+        #      sccnetworkmanagement. Default to "true"/"false" respectively
+        #      (set in the vm object type). Terraform-managed VMs are SCC-managed
+        #      by default. Paired with the Enf-VM-Tag-* Audit assignments in
+        #      alz-mgmt which validate values are "true" or "false".
         #
-        #   3. BackupPolicy (always) — SCC backup retention tier selector. Drives
-        #      the subscription-level backup policy assignments (see
-        #      main.policy.backup.tf) which use the built-in "with tag" variant
-        #      345fa903 to register VMs against the matching backup policy in the
-        #      vault. Default value SCC-BasicRetention; override per-VM via the
-        #      `backup_policy` field in compute tfvars for VMs needing standard
-        #      or extended retention.
+        #   3. Backup policy tier (always) — drives subscription-level backup
+        #      policy assignments. Tag name is configurable via
+        #      var.backup_policy_tag_name (default "BackupPolicy"). Tag value
+        #      is the tier KEY from var.backup_policy_tiers (e.g. "basic",
+        #      "standard", "extended"), not the policy name. Override per-VM
+        #      via the `backup_policy` field.
         #
         # Merge order matters: later values override earlier ones. vm.tags
-        # (user-supplied) comes first so we don't override explicit user tags with
-        # our defaults, then MaintenanceWindow, then SCC tags last so SCC tags
-        # can't be accidentally overridden by a clashing user tag.
+        # (user-supplied) comes first so explicit user tags take precedence
+        # over defaults, then operational tags. This means a VM can override
+        # sccosmanagement or BackupPolicy by setting it in its tags map.
         tags = merge(
           coalesce(vm.tags, {}),
           try(vm.maintenance_window, null) != null ? {
-            MaintenanceWindow = vm.maintenance_window
+            (var.maintenance_window_tag_name) = vm.maintenance_window
           } : {},
           {
-            sccosmanagement      = vm.sccosmanagement
-            sccnetworkmanagement = vm.sccnetworkmanagement
-            BackupPolicy         = vm.backup_policy
+            sccosmanagement              = vm.sccosmanagement
+            sccnetworkmanagement         = vm.sccnetworkmanagement
+            (var.backup_policy_tag_name) = vm.backup_policy
           }
         )
 

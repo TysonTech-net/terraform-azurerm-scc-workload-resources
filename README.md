@@ -30,15 +30,24 @@ module "workload_resources" {
 
 ## VM Backup Tier Selection
 
-Set `backup_policy` on a VM to choose its retention tier. Tag-based Azure Policy assignments register the VM against the matching backup policy in the vault:
+Set `backup_policy` on a VM to choose its retention tier (tier KEY, not policy name). Tag-based Azure Policy assignments register the VM against the matching backup policy in the vault:
 
 | `backup_policy` value | Daily | Weekly | Monthly | Yearly | Use case |
 |---|---|---|---|---|---|
-| `SCC-BasicRetention` (default) | 30 days | — | — | — | Dev/test |
-| `SCC-StandardRetention` | 14 days | 4 weeks | 3 months | — | Default prod |
-| `SCC-ExtendedRetention` | 14 days | 4 weeks | 12 months | 7 years | Compliance |
+| `basic` (default) | 30 days | — | — | — | Dev/test |
+| `standard` | 14 days | 4 weeks | 3 months | — | Default prod |
+| `extended` | 14 days | 4 weeks | 12 months | 7 years | Compliance |
 
-A fallback assignment catches VMs without a `BackupPolicy` tag (or with an invalid value) and registers them against `SCC-BasicRetention`, ensuring nothing escapes backup.
+A fallback assignment catches VMs without a valid tier tag and registers them against the tier configured by `var.backup_policy_fallback_tier` (default `basic`), ensuring nothing escapes backup.
+
+SCC standard policies are deployed into each vault with CAF-auto-generated names: `pol-rsv-<workload>-<env>-<tier>-<region>-<instance>` (e.g. `pol-rsv-identity-prod-basic-uks-001`). Toggle via `var.deploy_scc_default_backup_policies`.
+
+### Customising
+
+- **Different tag name**: set `var.backup_policy_tag_name` (default `"BackupPolicy"`) — also update the Modify/Audit assignments in alz-mgmt to match.
+- **Different tiers**: set `var.backup_policy_tiers` with your own `{ key = { policy_name_per_region = {...} } }` map. Works alongside `deploy_scc_default_backup_policies = false` if you're deploying your own backup policies via `management_backup_rsv_vm_backup_policy`.
+- **Different fallback tier**: set `var.backup_policy_fallback_tier` to any key from the tier map.
+- **Different maintenance window tag**: set `var.maintenance_window_tag_name` (default `"MaintenanceWindow"`).
 
 ## VM Credential Paths
 

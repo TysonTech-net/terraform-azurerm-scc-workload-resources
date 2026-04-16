@@ -1,5 +1,5 @@
 module "workload_management" {
-  source   = "git::https://github.com/TysonTech-net/terraform-azurerm-scc-workload-management.git?ref=v1.1.0"
+  source   = "git::https://github.com/TysonTech-net/terraform-azurerm-scc-workload-management.git?ref=v1.2.0"
   for_each = var.management
 
   # Shared
@@ -37,8 +37,14 @@ module "workload_management" {
   management_backup_rsv_soft_delete_enabled                            = each.value.management_backup_rsv_soft_delete_enabled
   management_backup_rsv_storage_mode_type                              = each.value.management_backup_rsv_storage_mode_type
   management_backup_rsv_tags                                           = each.value.management_backup_rsv_tags
-  management_backup_rsv_vm_backup_policy                               = each.value.management_backup_rsv_vm_backup_policy
-  management_backup_rsv_workload_backup_policy                         = each.value.management_backup_rsv_workload_backup_policy
+  # VM backup policies: merged view of SCC standard tiers (CAF-named, defined in
+  # scc.locals.backup_tiers.tf) + any user-supplied policies from the per-region
+  # var.management input. User keys override SCC defaults on collision so
+  # customers can extend or replace individual tiers without disabling the SCC
+  # defaults entirely. See var.deploy_scc_default_backup_policies to disable
+  # SCC defaults for full customer control.
+  management_backup_rsv_vm_backup_policy       = local.merged_vm_backup_policies[each.key]
+  management_backup_rsv_workload_backup_policy = each.value.management_backup_rsv_workload_backup_policy
 
   # Site Recovery Recovery Services Vault
   deploy_management_site_recovery_recovery_services_vault                     = each.value.deploy_management_site_recovery_recovery_services_vault
