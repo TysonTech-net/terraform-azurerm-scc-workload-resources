@@ -60,14 +60,32 @@ locals {
           })
         }
 
-        # Inject MaintenanceWindow tag for dynamic scoping
-        # When maintenance_window is set, the tag enables automatic assignment via dynamic scope
-        # This replaces the need for explicit maintenance_configuration_resource_ids
+        # Inject operational tags. Three categories are merged into vm.tags:
+        #
+        #   1. MaintenanceWindow (conditional) — set only when vm.maintenance_window
+        #      is specified. Drives Azure Update Manager dynamic scope assignment
+        #      without needing explicit maintenance_configuration_resource_ids.
+        #
+        #   2. sccosmanagement / sccnetworkmanagement (always) — SCC Logic Monitor
+        #      collector flags. Default to "true"/"false" respectively (set in the
+        #      vm object type). Terraform-managed VMs are SCC-managed by default.
+        #      These match the Azure Policy Deny assignments defined in alz-mgmt
+        #      (Enf-VM-Tag-SccOsMgmt / Enf-VM-Tag-SccNetMgmt) which enforce that
+        #      only "true" or "false" values are valid.
+        #
+        # The merge order matters: later values override earlier ones. vm.tags
+        # (user-supplied) comes first so we don't override explicit user tags with
+        # our defaults, then MaintenanceWindow, then SCC tags last so SCC tags
+        # can't be accidentally overridden by a clashing user tag.
         tags = merge(
           coalesce(vm.tags, {}),
           try(vm.maintenance_window, null) != null ? {
             MaintenanceWindow = vm.maintenance_window
-          } : {}
+          } : {},
+          {
+            sccosmanagement      = vm.sccosmanagement
+            sccnetworkmanagement = vm.sccnetworkmanagement
+          }
         )
 
         # Resolve maintenance configuration (legacy explicit assignments):
@@ -126,23 +144,35 @@ locals {
   }
 
   # VMs eligible for auto-generated credentials (no password available at all).
+  # Linux VMs are excluded: they authenticate via SSH keys (handled separately by
+  # the AVM VM module via tls_private_key). Forcing the auto-credential KV path on
+  # Linux VMs triggers an "Invalid count argument" error in the AVM module's
+  # azurerm_key_vault_secret.admin_ssh_key resource because `ssh_secret_count`
+  # depends on whether generated_secrets_key_vault_secret_config was passed, and
+  # that config references a KV resource ID which is unknown until apply.
+  # Keeping the path Windows-only avoids the plan-time indeterminate count.
   _credential_autogen_eligible = {
     for region, vms in local.compute_vms_with_resolved_subnets : region => {
       for vm_key, vm in vms : vm_key =>
-        var.compute_auto_credential_keyvault_enabled
-        && contains(local._kv_enabled_regions, region)
-        && local._effective_admin_password[region][vm_key] == null
-        && try(vm.generated_secrets_key_vault_secret_config, null) == null
+      var.compute_auto_credential_keyvault_enabled
+      && contains(local._kv_enabled_regions, region)
+      && lower(try(vm.os_type, "Windows")) == "windows" # skip Linux VMs — see comment above
+      && local._effective_admin_password[region][vm_key] == null
+      && try(vm.generated_secrets_key_vault_secret_config, null) == null
     }
   }
 
   # VMs eligible for storing their password in Key Vault (have a password + KV enabled).
+  # Windows-only for the same reason as _credential_autogen_eligible: injecting
+  # `generated_secrets_key_vault_secret_config` on Linux VMs triggers the AVM
+  # module's SSH secret count ambiguity at plan time.
   _credential_store_eligible = {
     for region, vms in local.compute_vms_with_resolved_subnets : region => {
       for vm_key, vm in vms : vm_key =>
-        contains(local._kv_enabled_regions, region)
-        && local._effective_admin_password[region][vm_key] != null
-        && try(vm.store_password_in_keyvault, false) == true
+      contains(local._kv_enabled_regions, region)
+      && lower(try(vm.os_type, "Windows")) == "windows"
+      && local._effective_admin_password[region][vm_key] != null
+      && try(vm.store_password_in_keyvault, false) == true
     }
   }
 
@@ -153,12 +183,12 @@ locals {
   compute_vms_with_credentials = {
     for region, vms in local.compute_vms_with_resolved_subnets : region => {
       for vm_key, vm in vms : vm_key => merge(vm, {
-        admin_password = local._effective_admin_password[region][vm_key]
+        admin_password                     = local._effective_admin_password[region][vm_key]
         generate_admin_password_or_ssh_key = try(local._credential_autogen_eligible[region][vm_key], false) ? true : try(vm.generate_admin_password_or_ssh_key, null)
         generated_secrets_key_vault_secret_config = (
           try(local._credential_autogen_eligible[region][vm_key], false)
           || try(local._credential_store_eligible[region][vm_key], false)
-        ) ? {
+          ) ? {
           key_vault_resource_id = local.regional_kv_resource_ids[region]
         } : try(vm.generated_secrets_key_vault_secret_config, null)
       })

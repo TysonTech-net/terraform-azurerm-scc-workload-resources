@@ -1,5 +1,5 @@
 module "workload_management" {
-  source   = "git::https://github.com/TysonTech-net/terraform-azurerm-scc-workload-management.git?ref=v1.0.0"
+  source   = "git::https://github.com/TysonTech-net/terraform-azurerm-scc-workload-management.git?ref=v1.1.0"
   for_each = var.management
 
   # Shared

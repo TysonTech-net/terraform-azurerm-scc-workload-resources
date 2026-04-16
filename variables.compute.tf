@@ -112,13 +112,13 @@ variable "compute" {
 
       # Network Interfaces
       network_interfaces = map(object({
-        name                          = optional(string)
+        name                           = optional(string)
         accelerated_networking_enabled = optional(bool, true)
         ip_forwarding_enabled          = optional(bool, false)
-        dns_servers                   = optional(list(string))
-        edge_zone                     = optional(string)
-        internal_dns_name_label       = optional(string)
-        tags                          = optional(map(string))
+        dns_servers                    = optional(list(string))
+        edge_zone                      = optional(string)
+        internal_dns_name_label        = optional(string)
+        tags                           = optional(map(string))
 
         ip_configurations = map(object({
           name                          = optional(string)
@@ -157,10 +157,10 @@ variable "compute" {
       vtpm_enabled               = optional(bool, true)
 
       # Patching
-      patch_mode                = optional(string, "AutomaticByPlatform")
-      patch_assessment_mode     = optional(string, "AutomaticByPlatform")
-      enable_automatic_updates  = optional(bool, true)
-      hotpatching_enabled       = optional(bool, false)
+      patch_mode               = optional(string, "AutomaticByPlatform")
+      patch_assessment_mode    = optional(string, "AutomaticByPlatform")
+      enable_automatic_updates = optional(bool, true)
+      hotpatching_enabled      = optional(bool, false)
 
       # Boot Diagnostics
       boot_diagnostics                     = optional(bool, true)
@@ -233,12 +233,29 @@ variable "compute" {
       # Maintenance Configuration (Azure Update Manager)
       # Recommended: Use maintenance_window tag for dynamic scoping
       # The VM will automatically be assigned to the maintenance window via dynamic scope
-      # Valid values: "patch_wave_1_windows", "patch_wave_2_windows", "patch_wave_1_linux", "patch_wave_2_linux"
+      # Valid values:
+      #   - "patch_wave_1"          : OS-agnostic default wave (covers Windows + Linux)
+      #   - "patch_wave_1_windows"  : Windows wave 1 (Wednesday after Patch Tuesday 22:00 GMT)
+      #   - "patch_wave_2_windows"  : Windows wave 2 (Thursday after Patch Tuesday 22:00 GMT)
+      #   - "patch_wave_1_linux"    : Linux wave 1 (Wednesday after Patch Tuesday 23:00 GMT)
+      #   - "patch_wave_2_linux"    : Linux wave 2 (Thursday after Patch Tuesday 23:00 GMT)
+      # If omitted, the Azure Policy Modify effect defaults the tag to "patch_wave_1".
       maintenance_window = optional(string)
       # Legacy Option 1: Reference central config by key (from platform_shared) - creates explicit assignment
       maintenance_configuration_key = optional(string)
       # Legacy Option 2: Specify resource IDs directly (for custom/external configs) - creates explicit assignment
       maintenance_configuration_resource_ids = optional(map(string))
+
+      # SCC Management Tags (Logic Monitor collector-based monitoring flags)
+      # - sccosmanagement = "true"    : VM is under SCC OS Boost/Management service (default for TF-managed VMs)
+      # - sccnetworkmanagement = "true": VM is a network appliance under SCC Network Management
+      # These tags drive Logic Monitor collector assignment rules. Defaults match
+      # the typical SCC-managed infrastructure profile: OS management enabled,
+      # network management disabled (network appliances must opt in explicitly).
+      # VMs deployed outside Terraform get "false" for both via the Azure Policy
+      # Modify effect defined in alz-mgmt (policy name: Add-Default-Tag-VM).
+      sccosmanagement      = optional(string, "true")
+      sccnetworkmanagement = optional(string, "false")
 
       # Tags
       tags = optional(map(string), {})
@@ -257,10 +274,10 @@ variable "compute" {
       target_location = string
 
       # Recovery Services Vault Configuration
-      use_existing_vault        = optional(bool, false)  # true = use existing, false = create new
-      vault_name                = optional(string)       # RSV name (create or existing)
-      vault_resource_group_name = optional(string)       # RG for vault (existing vault)
-      vault_resource_group_key  = optional(string)       # Reference to vm_resource_groups
+      use_existing_vault        = optional(bool, false) # true = use existing, false = create new
+      vault_name                = optional(string)      # RSV name (create or existing)
+      vault_resource_group_name = optional(string)      # RG for vault (existing vault)
+      vault_resource_group_key  = optional(string)      # Reference to vm_resource_groups
 
       # Replication Policy
       recovery_point_retention_in_minutes          = optional(number, 1440) # 24 hours
