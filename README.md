@@ -23,8 +23,20 @@ module "workload_resources" {
 ## What It Orchestrates
 
 - [AVM Subscription Vending](https://registry.terraform.io/modules/Azure/avm-ptn-alz-sub-vending/azure/latest) (resource groups, VNets, NSGs, route tables, UMIs, role assignments)
-- [scc-workload-management](https://github.com/TysonTech-net/terraform-azurerm-scc-workload-management) (Recovery Services Vault, Key Vault, Update Manager)
+- [scc-workload-management](https://github.com/TysonTech-net/terraform-azurerm-scc-workload-management) (Recovery Services Vault, Key Vault, Update Manager, SCC standard backup policies)
 - [scc-workload-vm](https://github.com/TysonTech-net/terraform-azurerm-scc-workload-vm) (Virtual Machines with AVM, backup, maintenance, ASR/BCDR)
+- Subscription-level VM backup policy assignment (auto-registers VMs in the existing regional vault, using built-in policy `09ce66bc`)
+- VM tag injection for operational tagging (MaintenanceWindow for Update Manager dynamic scoping, sccosmanagement/sccnetworkmanagement for Logic Monitor collector assignment)
+
+## VM Credential Paths
+
+VM admin credentials resolve in this priority order:
+
+1. **Explicit per-VM** (`admin_password` in the VM tfvars) — used as-is
+2. **Env-injected fallback** (`var.vm_admin_password` via `TF_VAR_vm_admin_password`) — used when per-VM is unset
+3. **Auto-generated** (Windows VMs only, when `compute_auto_credential_keyvault_enabled = true` and regional Key Vault is deployed) — 22-char random password stored in KV
+
+Linux VMs skip the auto-generation path and use SSH keys (handled separately by the AVM VM module via `tls_private_key`). Existing VMs with baked admin passwords can opt in to KV storage via `store_password_in_keyvault = true` to avoid the OS disk recreation that dropping the password would trigger.
 
 ## Requirements
 
