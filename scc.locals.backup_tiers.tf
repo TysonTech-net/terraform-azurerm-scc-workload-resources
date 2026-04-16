@@ -1,15 +1,17 @@
 ###############################################################################
-# SCC Standard VM Backup Policy Definitions (CAF-Named)
+# SCC Standard VM Backup Policy Definitions (Constant-Named)
 ###############################################################################
-# Defines three SCC-standard VM backup policy definitions with auto-generated
-# names following the CAF (Cloud Adoption Framework) pattern:
+# Defines three SCC-standard VM backup policy definitions with constant names
+# that are the SAME across all vaults, regions, and workloads:
 #
-#   pol-rsv-{workload}-{env}-{tier}-{region_abbr}-{instance}
+#   SCC-BasicBackup     : 30 days daily
+#   SCC-StandardBackup  : 14 daily + 4 weekly + 3 monthly
+#   SCC-ExtendedBackup  : 14 daily + 4 weekly + 12 monthly + 7 yearly
 #
-# Examples:
-#   pol-rsv-identity-prod-basic-uks-001
-#   pol-rsv-security-prod-standard-ukw-001
-#   pol-rsv-management-prod-extended-uks-001
+# Constant naming (rather than CAF naming with workload/region embedded) lets
+# VMs across all platforms use the same BackupPolicy tag value to select a
+# given tier, and lets the alz-mgmt root-MG Modify/Audit policies enumerate
+# valid values without per-workload/region knowledge.
 #
 # These definitions are merged into management_backup_rsv_vm_backup_policy
 # (passed to scc-workload-management) so they get deployed into each region's
@@ -17,6 +19,10 @@
 # subscription-level backup policy assignments in main.policy.backup.tf —
 # VMs tagged with `BackupPolicy = <exact-policy-name>` are registered against
 # that policy in the vault.
+#
+# Customer-supplied additional policies (via var.management[region].management_backup_rsv_vm_backup_policy)
+# can use any naming convention (CAF or otherwise). Only the SCC-shipped
+# defaults follow the constant naming.
 #
 # Toggle `var.deploy_scc_default_backup_policies` (default: true) controls
 # whether these SCC defaults are deployed. Customers with their own backup
@@ -43,8 +49,17 @@ locals {
   # what VMs tag themselves with.
   _scc_default_backup_tiers_all = {
     for region, abbr in local.get_region_abbr : region => {
+      # Constant SCC tier names — same across all vaults, regions, and workloads.
+      # VMs everywhere can use the same BackupPolicy tag value to select a tier,
+      # which keeps the alz-mgmt root-MG Modify/Audit policies simple (no need
+      # to know per-workload/region context to enumerate valid values).
+      #
+      # Customer-supplied additional policies (via
+      # var.management[region].management_backup_rsv_vm_backup_policy) can use
+      # any naming convention they want — only the SCC-shipped policies follow
+      # the constant naming.
       basic = {
-        name                           = "pol-rsv-${var.naming.workload}-${var.naming.env}-basic-${abbr}-${var.naming.instance}"
+        name                           = "SCC-BasicBackup"
         timezone                       = "UTC"
         instant_restore_retention_days = 5
         policy_type                    = "V2"
@@ -55,7 +70,7 @@ locals {
         }
       }
       standard = {
-        name                           = "pol-rsv-${var.naming.workload}-${var.naming.env}-standard-${abbr}-${var.naming.instance}"
+        name                           = "SCC-StandardBackup"
         timezone                       = "UTC"
         instant_restore_retention_days = 5
         policy_type                    = "V2"
@@ -75,7 +90,7 @@ locals {
         }
       }
       extended = {
-        name                           = "pol-rsv-${var.naming.workload}-${var.naming.env}-extended-${abbr}-${var.naming.instance}"
+        name                           = "SCC-ExtendedBackup"
         timezone                       = "UTC"
         instant_restore_retention_days = 5
         policy_type                    = "V2"

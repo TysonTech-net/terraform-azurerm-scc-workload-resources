@@ -32,17 +32,19 @@ module "workload_resources" {
 
 Set `backup_policy` on a VM to the exact name of the backup policy you want it registered against. The tag value matches the policy name in the vault — no abstraction layer. This trivially supports customers with N policies per region.
 
-SCC standard policies are deployed into each vault with CAF-auto-generated names: `pol-rsv-<workload>-<env>-<tier>-<region>-<instance>`. The three default tiers:
+SCC standard policies are deployed into each vault with constant names — same across all vaults, regions, and workloads:
 
-| Tier | CAF policy name | Daily | Weekly | Monthly | Yearly | Use case |
-|---|---|---|---|---|---|---|
-| basic | `pol-rsv-<workload>-<env>-basic-<region>-001` | 30 days | — | — | — | Dev/test (default fallback) |
-| standard | `pol-rsv-<workload>-<env>-standard-<region>-001` | 14 days | 4 weeks | 3 months | — | Production |
-| extended | `pol-rsv-<workload>-<env>-extended-<region>-001` | 14 days | 4 weeks | 12 months | 7 years | Compliance |
+| Policy name | Daily | Weekly | Monthly | Yearly | Use case |
+|---|---|---|---|---|---|
+| `SCC-BasicBackup` | 30 days | — | — | — | Dev/test (default fallback) |
+| `SCC-StandardBackup` | 14 days | 4 weeks | 3 months | — | Default production |
+| `SCC-ExtendedBackup` | 14 days | 4 weeks | 12 months | 7 years | Compliance/regulatory |
 
-Example VM tag value (identity workload, prod, instance 001, uksouth, basic): `pol-rsv-identity-prod-basic-uks-001`.
+Example VM tag value: `SCC-StandardBackup`. Same value works across all regions and workloads — no need to vary per VM.
 
-A fallback assignment catches VMs without a valid `BackupPolicy` tag and registers them against the per-region fallback policy (default: SCC basic tier for the region; configurable via `var.backup_policy_fallback_name_per_region`).
+A fallback assignment catches VMs without a valid `BackupPolicy` tag and registers them against the per-region fallback policy (default: `SCC-BasicBackup`; configurable via `var.backup_policy_fallback_name_per_region`).
+
+Customer-supplied additional policies (via `var.management[region].management_backup_rsv_vm_backup_policy`) can use any naming convention — only the SCC defaults follow the constant naming. Tag those VMs with the exact name of your custom policy.
 
 Toggle SCC defaults via `var.deploy_scc_default_backup_policies`.
 
