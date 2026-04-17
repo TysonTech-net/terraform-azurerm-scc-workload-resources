@@ -334,10 +334,11 @@ variable "compute" {
       capacity_reservation_sku    = optional(string)
 
       # Test Failover Network (optional)
-      # Creates an isolated VNet mirroring target subnet structure for DR drills.
-      # Address space is derived by offsetting the second octet (default +100).
-      create_test_network              = optional(bool, false)
-      test_network_second_octet_offset = optional(number, 100)
+      # Creates an isolated VNet with matching subnet names for DR drills.
+      # No peering, no DNS, no routes. Subnets auto-divided as /28 blocks.
+      create_test_network         = optional(bool, false)
+      test_network_address_space  = optional(list(string), [])
+      test_network_subnet_newbits = optional(number, 4)
     }))
   }))
   default     = {}
