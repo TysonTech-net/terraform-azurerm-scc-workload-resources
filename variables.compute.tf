@@ -339,6 +339,9 @@ variable "compute" {
       create_test_network         = optional(bool, false)
       test_network_address_space  = optional(list(string), [])
       test_network_subnet_newbits = optional(number, 4)
+
+      # Automation Account for ASR agent auto-update (optional, cross-sub supported)
+      automation_account_id = optional(string)
     }))
   }))
   default     = {}
