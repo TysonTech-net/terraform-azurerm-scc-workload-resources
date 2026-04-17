@@ -169,7 +169,7 @@ variable "compute" {
       # by AUM dynamic scopes via MaintenanceWindow tag). Set explicitly to
       # false to opt a VM out of AUM scheduling.
       bypass_platform_safety_checks_on_user_schedule_enabled = optional(bool)
-      hotpatching_enabled      = optional(bool, false)
+      hotpatching_enabled                                    = optional(bool, false)
 
       # Boot Diagnostics
       boot_diagnostics                     = optional(bool, true)
@@ -332,6 +332,12 @@ variable "compute" {
       # Capacity Reservation (optional)
       enable_capacity_reservation = optional(bool, false)
       capacity_reservation_sku    = optional(string)
+
+      # Test Failover Network (optional)
+      # Creates an isolated VNet mirroring target subnet structure for DR drills.
+      # Address space is derived by offsetting the second octet (default +100).
+      create_test_network              = optional(bool, false)
+      test_network_second_octet_offset = optional(number, 100)
     }))
   }))
   default     = {}
