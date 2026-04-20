@@ -123,7 +123,7 @@ locals {
   dns_server_ip_addresses = length(var.hub_region_mapping) > 0 ? {
     for hub_key, region in var.hub_region_mapping : region => [local.dns_ips_raw[hub_key]]
     if contains(keys(local.dns_ips_raw), hub_key)
-  } : {
+    } : {
     for key, value in local.dns_ips_raw : key => [value]
   }
 
@@ -145,6 +145,10 @@ locals {
     try(local.platform_shared_outputs.scc_maintenance_configuration_resource_ids, null),
     {}
   )
+
+  # Automation Account ID (from management subscription, for ASR agent auto-update)
+  # Cross-subscription: workload vaults reference the central Automation Account
+  scc_automation_account_id = try(local.platform_shared_outputs.scc_automation_account_id, null)
 
   # Hub VNet address spaces (for exact-match UDRs to override peering routes)
   # Uses scc_hub_vnet_address_spaces which has resolved values from config module
