@@ -226,6 +226,9 @@ variable "compute" {
         target_subnet_name = optional(string) # Subnet name in target VNet
         target_static_ip   = optional(string) # Static private IP in target
 
+        # Test Failover (defaults to target values when test network is enabled)
+        failover_test_static_ip = optional(string) # Defaults to target_static_ip
+
         # Target Availability (VM-level override)
         target_zone                         = optional(string) # Target availability zone
         target_availability_set_id          = optional(string)
