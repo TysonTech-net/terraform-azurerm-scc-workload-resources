@@ -367,9 +367,16 @@ module "workload_vms" {
     # subscription as the ASR vault. Resolved from the workload_management
     # module output for the target region (where the vault lives).
     # Falls back to explicit tfvars override if provided.
-    automation_account_id = coalesce(
-      try(each.value.asr_config.automation_account_id, null),
-      try(module.workload_management[each.value.asr_config.target_location].management_automation_account_resource_id, null)
+    # Automation Account for ASR agent auto-update. Resolved from:
+    # 1. Explicit override in compute tfvars (asr_config.automation_account_id)
+    # 2. Workload management module output for the target region
+    # 3. null (auto-update disabled, agents stay on installed version)
+    automation_account_id = try(
+      coalesce(
+        try(each.value.asr_config.automation_account_id, null),
+        try(module.workload_management[each.value.asr_config.target_location].management_automation_account_resource_id, null)
+      ),
+      null
     )
   } : null
 
