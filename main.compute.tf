@@ -323,7 +323,14 @@ module "workload_vms" {
   patch_mode_default               = "AutomaticByPlatform"
 
   # ASR/BCDR Configuration - enables Site Recovery replication to target region
-  asr_config = each.value.asr_config
+  # Injects the central Automation Account ID from platform_shared state for
+  # ASR agent auto-update, unless explicitly overridden in the compute tfvars.
+  asr_config = each.value.asr_config != null ? merge(each.value.asr_config, {
+    automation_account_id = coalesce(
+      try(each.value.asr_config.automation_account_id, null),
+      local.scc_automation_account_id
+    )
+  }) : null
 
   # Depends on vending (subnets), management (Key Vault), and RBAC (secrets officer)
   depends_on = [
