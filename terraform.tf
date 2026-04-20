@@ -146,9 +146,13 @@ locals {
     {}
   )
 
-  # Automation Account ID (from management subscription, for ASR agent auto-update)
-  # Cross-subscription: workload vaults reference the central Automation Account
-  scc_automation_account_id = try(local.platform_shared_outputs.scc_automation_account_id, null)
+  # AMA User Assigned Managed Identity ID (from platform_shared policy defaults)
+  # Injected into every VM's managed_identities so TF doesn't fight the Azure
+  # Policy that assigns this UAMI to all VMs for Azure Monitor Agent.
+  scc_ama_user_assigned_managed_identity_id = try(
+    local.platform_shared_outputs.templated_inputs.management_group_settings.policy_default_values.ama_user_assigned_managed_identity_id,
+    null
+  )
 
   # Hub VNet address spaces (for exact-match UDRs to override peering routes)
   # Uses scc_hub_vnet_address_spaces which has resolved values from config module

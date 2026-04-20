@@ -219,11 +219,13 @@ locals {
 }
 
 # Virtual Machine Contributor — install backup extension, perform restores.
+# Uses subscription-scoped role_definition_id to match what Azure returns,
+# preventing unnecessary replacement on every apply.
 resource "azurerm_role_assignment" "vm_backup_policy_vm_contributor" {
   for_each = local.all_vm_backup_assignment_identities
 
   scope                            = "/subscriptions/${var.subscription}"
-  role_definition_id               = "/providers/Microsoft.Authorization/roleDefinitions/9980e02c-c2be-4d73-94e8-173b1dc7cf3c"
+  role_definition_id               = "/subscriptions/${var.subscription}/providers/Microsoft.Authorization/roleDefinitions/9980e02c-c2be-4d73-94e8-173b1dc7cf3c"
   principal_id                     = each.value
   skip_service_principal_aad_check = true
 }
@@ -233,7 +235,7 @@ resource "azurerm_role_assignment" "vm_backup_policy_backup_contributor" {
   for_each = local.all_vm_backup_assignment_identities
 
   scope                            = "/subscriptions/${var.subscription}"
-  role_definition_id               = "/providers/Microsoft.Authorization/roleDefinitions/5e467623-bb1f-42f4-a55d-6e525e11384b"
+  role_definition_id               = "/subscriptions/${var.subscription}/providers/Microsoft.Authorization/roleDefinitions/5e467623-bb1f-42f4-a55d-6e525e11384b"
   principal_id                     = each.value
   skip_service_principal_aad_check = true
 }
