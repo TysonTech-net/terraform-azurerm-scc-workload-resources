@@ -325,12 +325,36 @@ module "workload_vms" {
   # ASR/BCDR Configuration - enables Site Recovery replication to target region
   # Injects the central Automation Account ID from platform_shared state for
   # ASR agent auto-update, unless explicitly overridden in the compute tfvars.
-  asr_config = each.value.asr_config != null ? merge(each.value.asr_config, {
+  # Cannot use merge() here as it loses the typed object structure required by
+  # the downstream variable. Instead, pass through as-is and let the module
+  # default automation_account_id from the asr_config input. The ID is injected
+  # via a local that resolves the effective asr_config per region.
+  asr_config = each.value.asr_config != null ? {
+    target_location                              = each.value.asr_config.target_location
+    infrastructure_enabled                       = try(each.value.asr_config.infrastructure_enabled, true)
+    use_existing_vault                           = try(each.value.asr_config.use_existing_vault, false)
+    vault_name                                   = try(each.value.asr_config.vault_name, null)
+    vault_resource_group_name                    = try(each.value.asr_config.vault_resource_group_name, null)
+    vault_resource_group_key                     = try(each.value.asr_config.vault_resource_group_key, null)
+    recovery_point_retention_in_minutes          = try(each.value.asr_config.recovery_point_retention_in_minutes, 1440)
+    app_consistent_snapshot_frequency_in_minutes = try(each.value.asr_config.app_consistent_snapshot_frequency_in_minutes, 240)
+    target_network_id                            = try(each.value.asr_config.target_network_id, null)
+    target_network_name                          = try(each.value.asr_config.target_network_name, null)
+    target_network_resource_group                = try(each.value.asr_config.target_network_resource_group, null)
+    target_subnet_name                           = try(each.value.asr_config.target_subnet_name, null)
+    target_resource_group_id                     = try(each.value.asr_config.target_resource_group_id, null)
+    target_resource_group_name                   = try(each.value.asr_config.target_resource_group_name, null)
+    target_resource_group_key                    = try(each.value.asr_config.target_resource_group_key, null)
+    enable_capacity_reservation                  = try(each.value.asr_config.enable_capacity_reservation, false)
+    capacity_reservation_sku                     = try(each.value.asr_config.capacity_reservation_sku, null)
+    create_test_network                          = try(each.value.asr_config.create_test_network, false)
+    test_network_address_space                   = try(each.value.asr_config.test_network_address_space, [])
+    test_network_subnet_newbits                  = try(each.value.asr_config.test_network_subnet_newbits, 4)
     automation_account_id = coalesce(
       try(each.value.asr_config.automation_account_id, null),
       local.scc_automation_account_id
     )
-  }) : null
+  } : null
 
   # Depends on vending (subnets), management (Key Vault), and RBAC (secrets officer)
   depends_on = [
