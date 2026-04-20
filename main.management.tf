@@ -1,5 +1,5 @@
 module "workload_management" {
-  source   = "git::https://github.com/TysonTech-net/terraform-azurerm-scc-workload-management.git?ref=v1.2.0"
+  source   = "git::https://github.com/TysonTech-net/terraform-azurerm-scc-workload-management.git?ref=v1.3.0"
   for_each = var.management
 
   # Shared
@@ -96,4 +96,8 @@ module "workload_management" {
   management_kv_wait_for_rbac_before_key_operations     = each.value.management_kv_wait_for_rbac_before_key_operations
   management_kv_wait_for_rbac_before_secret_operations  = each.value.management_kv_wait_for_rbac_before_secret_operations
   management_kv_wait_for_rbac_before_contact_operations = each.value.management_kv_wait_for_rbac_before_contact_operations
+
+  # Automation Account (for ASR agent auto-update)
+  deploy_management_automation_account = try(each.value.deploy_management_automation_account, false)
+  management_automation_account_name   = try(each.value.management_automation_account_name, null)
 }

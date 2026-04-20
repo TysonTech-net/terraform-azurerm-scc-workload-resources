@@ -130,6 +130,19 @@ locals {
           } : {}
         )
 
+        # Inject AMA User Assigned Managed Identity into every VM so TF
+        # declares what the Azure Policy also assigns. Without this, TF
+        # sees SystemAssigned in config but SystemAssigned+UserAssigned
+        # in Azure (policy-applied), causing an identity update on every
+        # apply that the policy immediately reverts. This aligns them.
+        managed_identities = {
+          system_assigned = try(vm.managed_identities.system_assigned, true)
+          user_assigned_resource_ids = toset(concat(
+            tolist(try(vm.managed_identities.user_assigned_resource_ids, [])),
+            local.scc_ama_user_assigned_managed_identity_id != null ? [local.scc_ama_user_assigned_managed_identity_id] : []
+          ))
+        }
+
         # Resolve maintenance configuration (legacy explicit assignments):
         # - If maintenance_window is set, skip explicit assignment (dynamic scope handles it)
         # - If maintenance_configuration_key is set, look up resource ID from platform_shared
@@ -350,9 +363,13 @@ module "workload_vms" {
     create_test_network                          = try(each.value.asr_config.create_test_network, false)
     test_network_address_space                   = try(each.value.asr_config.test_network_address_space, [])
     test_network_subnet_newbits                  = try(each.value.asr_config.test_network_subnet_newbits, 4)
+    # Automation Account for ASR agent auto-update. Must be in the same
+    # subscription as the ASR vault. Resolved from the workload_management
+    # module output for the target region (where the vault lives).
+    # Falls back to explicit tfvars override if provided.
     automation_account_id = coalesce(
       try(each.value.asr_config.automation_account_id, null),
-      local.scc_automation_account_id
+      try(module.workload_management[each.value.asr_config.target_location].management_automation_account_resource_id, null)
     )
   } : null
 

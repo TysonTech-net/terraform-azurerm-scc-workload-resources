@@ -459,6 +459,10 @@ variable "management" {
       create  = optional(string, "30s")
       destroy = optional(string, "0s")
     }), {})
+
+    # Automation Account (for ASR agent auto-update, must be same sub as vault)
+    deploy_management_automation_account = optional(bool, false)
+    management_automation_account_name   = optional(string)
   }))
   default     = {}
   description = <<DESCRIPTION
