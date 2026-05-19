@@ -281,12 +281,16 @@ locals {
   # - AllowBastion: RDP/SSH from Bastion (bypasses firewall via UDR)
   # - AllowAzureLB: Azure health probes
   # - DenyAll: Block everything else
+  # All inbound + outbound default rules always emitted with the same shape across regions.
+  # Hub-derived source CIDRs (AllowFirewallInBound, AllowBastionInBound) fall through to
+  # "0.0.0.0/32" — a non-matchable IP — when the corresponding hub-state lookup is absent,
+  # rather than omitting the rule conditionally. Conditional emission produced per-region
+  # type variance that propagated into default_network_security_groups, breaking the
+  # downstream map inference. The non-matchable fallback is a no-op in practice (no traffic
+  # can have source 0.0.0.0/32) while keeping the type stable.
   default_nsg_security_rules_by_region = {
     for region in keys(var.vending) : region => merge(
-      # Firewall allow rule — only emitted when the hub firewall/router subnet CIDR
-      # is known for this region. Avoids the historical no-op rule against a literal
-      # `10.0.0.0/26` fallback that doesn't match any real address in non-moj hubs.
-      contains(keys(local.firewall_subnet_address_prefixes), region) ? {
+      {
         AllowFirewallInBound = {
           name                       = "AllowFirewallInBound"
           priority                   = 3999
@@ -295,13 +299,10 @@ locals {
           protocol                   = "*"
           source_port_range          = "*"
           destination_port_range     = "*"
-          source_address_prefix      = local.firewall_subnet_address_prefixes[region]
+          source_address_prefix      = try(local.firewall_subnet_address_prefixes[region], "0.0.0.0/32")
           destination_address_prefix = "VirtualNetwork"
           description                = "Allow inbound traffic from firewall (return traffic, inspected flows)"
         }
-      } : {},
-      # Bastion allow rule — same pattern: omit when CIDR unknown.
-      contains(keys(local.bastion_subnet_address_prefixes), region) ? {
         AllowBastionInBound = {
           name                       = "AllowBastionInBound"
           priority                   = 4000
@@ -311,13 +312,10 @@ locals {
           source_port_range          = "*"
           destination_port_range     = null
           destination_port_ranges    = ["22", "3389"]
-          source_address_prefix      = local.bastion_subnet_address_prefixes[region]
+          source_address_prefix      = try(local.bastion_subnet_address_prefixes[region], "0.0.0.0/32")
           destination_address_prefix = "VirtualNetwork"
           description                = "Allow RDP/SSH from Bastion (bypasses firewall via UDR)"
         }
-      } : {},
-      # Always-on inbound rules (no hub-state dependency).
-      {
         AllowAzureLoadBalancerInBound = {
           name                       = "AllowAzureLoadBalancerInBound"
           priority                   = 4001

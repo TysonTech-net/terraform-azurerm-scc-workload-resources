@@ -2,6 +2,21 @@
 
 All notable changes to this module are documented in this file. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.10.2] - 2026-05-19
+
+### Fixed
+
+- **Per-NSG type variance from `allow_vnet_inbound` conditional injection.** v1.10.0 + v1.10.1 attempted to inject `AllowVnetInBound` into `default_network_security_groups[<plink-NSG>].security_rules` only when the per-subnet flag was true. Every variant tried (`condition ? {rule} : {}`, `for-with-if`, `tomap()` cast, schema-coerce via `merge(schema, rule)`) still produced per-NSG `security_rules` type variance — Terraform inferred `default_network_security_groups` as `object` with per-NSG named attributes instead of `map`, breaking the downstream `merged_network_security_groups` conditional with "Inconsistent conditional result types". Root cause: any conditional-presence pattern at the per-subnet level changes the inferred shape of the outer collection.
+- **Fix: always-emit `AllowVnetInBound`, conditional source CIDR.** The rule is now part of `default_nsg_security_rules_by_region` and appears on every default NSG. `source_address_prefix` is `"VirtualNetwork"` when `subnet.allow_vnet_inbound = true`, otherwise `"0.0.0.0/32"` (non-matchable IP, effective no-op). Same shape across all NSGs eliminates the type variance.
+- **`var.additional_nsg_rules` no longer participates in the default NSG merge.** Same type-variance class of problem (the typed variable's `map(map(object))` doesn't unify with the inline default rules' inferred type). The variable is kept in the module for backwards compatibility but is now a no-op. Callers needing additional rules should provide a full custom NSG via `vending.<region>.network_security_groups` and reference it from the subnet's `network_security_group.key_reference` — the existing escape hatch.
+- **Default `AllowFirewallInBound` / `AllowBastionInBound` always emitted** (no longer gated by hub-state presence). When the hub CIDR is unknown, source falls through to `"0.0.0.0/32"`. Conditional emission produced the same type-variance class of problem.
+
+### Compatibility
+
+- Bug-fix release. No new variables, no API changes.
+- Backwards-compatible with v1.10.x consumers; resolves the inferred-object-vs-map error that prevented any consumer using the per-subnet `allow_vnet_inbound` flag from planning.
+- `var.additional_nsg_rules` accepts the same shape as v1.10.0+ but is silently ignored. Will be reconsidered in a future release once a type-stable mechanism is designed.
+
 ## [1.10.1] - 2026-05-19
 
 ### Fixed

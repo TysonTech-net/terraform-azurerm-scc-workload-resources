@@ -80,35 +80,39 @@ locals {
         # Rule sources, merged in order — later args win on key collision.
         # 1. Region-aware default rule set (firewall/bastion/azlb allows + deny-all + outbound).
         # 2. Per-subnet ergonomic AllowVnetInBound for plink subnets hosting consumer PEs.
-        #    Opt in via the subnet's allow_vnet_inbound = true flag. The orchestrator's default
-        #    rule set deliberately omits AllowVnetInBound to force east-west through hub
-        #    inspection; this restores it per-subnet for the legitimate intra-VNet PE case.
+        #    Opt in via the subnet's allow_vnet_inbound = true flag.
         # 3. Caller-supplied additional rules from var.additional_nsg_rules, keyed by NSG key.
         #
-        # Both conditional sources use for-with-if rather than `condition ? {key=val} : {}`
-        # because the latter produces inconsistent object types per NSG (some NSGs have the
-        # extra rule, others don't), which makes Terraform infer default_network_security_groups
-        # as an object rather than a map. The for-with-if pattern preserves a stable
-        # map(rule_object) type whether the condition matches or not.
+        # Each rule from any source is coerced through local.nsg_rule_schema so all rules end
+        # up with the same 14-field shape. Without this coercion, per-NSG security_rules type
+        # inference would diverge: NSGs with allow_vnet_inbound = true would have a different
+        # rule-object type from NSGs without (because the inline AllowVnetInBound rule has fewer
+        # fields than the typed var.additional_nsg_rules and the union shape inferred from the
+        # default rules). That diverged inferred type makes default_network_security_groups
+        # collapse to an object instead of a map, breaking the downstream merged_network_security_groups
+        # conditional with "Inconsistent conditional result types".
+        # AllowVnetInBound always emitted but source_address_prefix is conditional —
+        # "VirtualNetwork" when the per-subnet allow_vnet_inbound flag is true, "0.0.0.0/32"
+        # (non-matchable) otherwise. Always-emit keeps the security_rules type uniform across
+        # all NSGs (otherwise per-NSG type variance breaks default_network_security_groups
+        # map inference). The non-matchable IP makes the rule a no-op for subnets that don't
+        # need it; no real traffic can have source 0.0.0.0/32.
         security_rules = merge(
           try(local.default_nsg_security_rules_by_region[subnet_key.region], local.default_nsg_security_rules),
           {
-            for k, v in {
-              AllowVnetInBound = {
-                name                       = "AllowVnetInBound"
-                priority                   = 3998
-                direction                  = "Inbound"
-                access                     = "Allow"
-                protocol                   = "*"
-                source_port_range          = "*"
-                destination_port_range     = "*"
-                source_address_prefix      = "VirtualNetwork"
-                destination_address_prefix = "VirtualNetwork"
-                description                = "Allow intra-VNet inbound (consumer PE NICs etc.)"
-              }
-            } : k => v if try(subnet_key.subnet.allow_vnet_inbound, false)
-          },
-          { for k, v in try(var.additional_nsg_rules[subnet_key.key], {}) : k => v },
+            AllowVnetInBound = {
+              name                       = "AllowVnetInBound"
+              priority                   = 3998
+              direction                  = "Inbound"
+              access                     = "Allow"
+              protocol                   = "*"
+              source_port_range          = "*"
+              destination_port_range     = "*"
+              source_address_prefix      = try(subnet_key.subnet.allow_vnet_inbound, false) ? "VirtualNetwork" : "0.0.0.0/32"
+              destination_address_prefix = "VirtualNetwork"
+              description                = "Allow intra-VNet inbound (active only when subnet.allow_vnet_inbound = true; non-matchable source 0.0.0.0/32 otherwise)"
+            }
+          }
         )
       }
     }
