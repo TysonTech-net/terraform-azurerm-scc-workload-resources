@@ -48,6 +48,13 @@ variable "vending" {
         }))
         private_endpoint_network_policies             = optional(string, "Enabled")
         private_link_service_network_policies_enabled = optional(bool, true)
+        # When true, the orchestrator-generated default NSG for this subnet emits an additional
+        # AllowVnetInBound rule at priority 3998 (VirtualNetwork → VirtualNetwork, any protocol/port).
+        # The orchestrator's default NSG deliberately omits the Azure system-default AllowVnetInBound
+        # to force east-west traffic through the hub firewall/NVA — that breaks intra-VNet traffic
+        # to consumer private endpoints in plink subnets. Set this to true for any subnet hosting
+        # consumer PEs reached from the same VNet. Ignored when `enable_default_nsg = false`.
+        allow_vnet_inbound = optional(bool, false)
         route_table = optional(object({
           id            = optional(string)
           key_reference = optional(string)

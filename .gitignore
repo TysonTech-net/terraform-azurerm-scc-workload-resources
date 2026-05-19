@@ -1,0 +1,17 @@
+# Terraform local state and working artefacts
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+crash.*.log
+
+# Sensitive override files
+*.tfvars
+*.tfvars.json
+!example.tfvars
+
+# CLI configuration
+.terraformrc
+terraform.rc

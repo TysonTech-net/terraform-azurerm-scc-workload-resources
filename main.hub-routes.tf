@@ -25,7 +25,7 @@ locals {
         address_prefix   = vnet.address_space[0] # Primary CIDR
         firewall_ip      = local.firewall_private_ip_addresses[region]
         region           = region
-      } if(
+        } if(
         local.use_hub_and_spoke &&
         contains(keys(local.gateway_route_tables), region) &&
         local.gateway_route_tables[region] != null &&

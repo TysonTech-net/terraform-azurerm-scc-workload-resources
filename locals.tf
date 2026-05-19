@@ -57,7 +57,7 @@ locals {
       suffix   = "${abbr}-${var.naming.instance}"
       region   = abbr
       instance = var.naming.instance
-    }}
+    } }
 
     # Hub Peering Names
     # Pattern: peer-{workload}-to-hub-{region_abbr}
