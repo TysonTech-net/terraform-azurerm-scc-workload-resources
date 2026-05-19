@@ -72,12 +72,36 @@ locals {
             location   = coalesce(vnet.location, config.location)
           }
         ]
-      ]) : subnet_key.key => {
+        ]) : subnet_key.key => {
         name               = "nsg-${subnet_key.subnet.name}"
         location           = subnet_key.location
         resource_group_key = subnet_key.rg_key
         tags               = var.tags
-        security_rules     = try(local.default_nsg_security_rules_by_region[subnet_key.region], local.default_nsg_security_rules)
+        # Rule sources, merged in order — later args win on key collision.
+        # 1. Region-aware default rule set (firewall/bastion/azlb allows + deny-all + outbound).
+        # 2. Per-subnet ergonomic AllowVnetInBound for plink subnets hosting consumer PEs.
+        #    Opt in via the subnet's allow_vnet_inbound = true flag. The orchestrator's default
+        #    rule set deliberately omits AllowVnetInBound to force east-west through hub
+        #    inspection; this restores it per-subnet for the legitimate intra-VNet PE case.
+        # 3. Caller-supplied additional rules from var.additional_nsg_rules, keyed by NSG key.
+        security_rules = merge(
+          try(local.default_nsg_security_rules_by_region[subnet_key.region], local.default_nsg_security_rules),
+          try(subnet_key.subnet.allow_vnet_inbound, false) ? {
+            AllowVnetInBound = {
+              name                       = "AllowVnetInBound"
+              priority                   = 3998
+              direction                  = "Inbound"
+              access                     = "Allow"
+              protocol                   = "*"
+              source_port_range          = "*"
+              destination_port_range     = "*"
+              source_address_prefix      = "VirtualNetwork"
+              destination_address_prefix = "VirtualNetwork"
+              description                = "Allow intra-VNet inbound (consumer PE NICs etc.)"
+            }
+          } : {},
+          try(var.additional_nsg_rules[subnet_key.key], {}),
+        )
       }
     }
   ]...)
@@ -127,14 +151,14 @@ locals {
         # Auto-enable hub peering only if we have a valid hub VNet ID
         hub_peering_enabled = (
           local.use_hub_and_spoke && contains(keys(local.hub_virtual_network_resource_ids), region)
-        ) ? vnet.hub_peering_enabled : (
+          ) ? vnet.hub_peering_enabled : (
           vnet.hub_network_resource_id != null && vnet.hub_network_resource_id != "" ? vnet.hub_peering_enabled : false
         )
 
         # Auto-enable vWAN connection only if we have a valid vWAN hub ID
         vwan_connection_enabled = (
           local.use_virtual_wan && contains(keys(local.virtual_wan_hub_resource_ids), region)
-        ) ? vnet.vwan_connection_enabled : (
+          ) ? vnet.vwan_connection_enabled : (
           vnet.vwan_hub_resource_id != null && vnet.vwan_hub_resource_id != "" ? vnet.vwan_connection_enabled : false
         )
 

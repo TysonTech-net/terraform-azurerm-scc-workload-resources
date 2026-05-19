@@ -164,3 +164,137 @@ traffic to spokes to be inspected by the firewall.
 NOTE: Requires the gateway route table to be enabled in platform_shared.
 DESCRIPTION
 }
+
+###############################################################################
+# Hub Topology Overrides
+###############################################################################
+# Caller-side bypass of the hub-state lookup. All defaults are {} so existing
+# consumers see no behaviour change. When a key is set for a given region, it
+# beats both the canonical SCC contract output (`scc_*` from hub state) and
+# the legacy AVM-stock output. See README for the full resolution order.
+
+variable "hub_router_private_ip_override" {
+  type        = map(string)
+  default     = {}
+  description = <<DESCRIPTION
+Override hub state lookup for the hub router next-hop IP per region. Map key = region name
+(e.g. "uksouth"), value = IPv4 string. When non-empty for a region, beats both the canonical
+SCC `scc_hub_router_private_ip_addresses` and the legacy AVM
+`hub_and_spoke_vnet_firewall_private_ip_address` outputs.
+
+Use when hub state is inaccessible or exposes the value under a non-standard name.
+
+Example:
+```hcl
+hub_router_private_ip_override = {
+  uksouth = "172.16.0.100"
+  ukwest  = "172.24.0.100"
+}
+```
+DESCRIPTION
+
+  validation {
+    condition     = alltrue([for ip in values(var.hub_router_private_ip_override) : can(regex("^([0-9]{1,3}\\.){3}[0-9]{1,3}$", ip))])
+    error_message = "Each value in hub_router_private_ip_override must be an IPv4 address (e.g. 172.16.0.100)."
+  }
+}
+
+variable "hub_router_subnet_address_prefixes_override" {
+  type        = map(string)
+  default     = {}
+  description = <<DESCRIPTION
+Override hub state lookup for the hub router / firewall front-end subnet CIDR per region.
+Used as the source CIDR for the AllowFirewallInBound rule in default NSGs.
+
+Example:
+```hcl
+hub_router_subnet_address_prefixes_override = {
+  uksouth = "172.16.0.128/26"
+  ukwest  = "172.24.0.128/26"
+}
+```
+DESCRIPTION
+
+  validation {
+    condition     = alltrue([for cidr in values(var.hub_router_subnet_address_prefixes_override) : can(cidrnetmask(cidr))])
+    error_message = "Each value in hub_router_subnet_address_prefixes_override must be a valid IPv4 CIDR (e.g. 172.16.0.128/26)."
+  }
+}
+
+variable "bastion_subnet_address_prefixes_override" {
+  type        = map(string)
+  default     = {}
+  description = <<DESCRIPTION
+Override hub state lookup for the Bastion subnet CIDR per region.
+Used as the source CIDR for the AllowBastionInBound rule in default NSGs.
+
+Example:
+```hcl
+bastion_subnet_address_prefixes_override = {
+  uksouth = "172.16.0.0/26"
+  ukwest  = "172.24.0.0/26"
+}
+```
+DESCRIPTION
+
+  validation {
+    condition     = alltrue([for cidr in values(var.bastion_subnet_address_prefixes_override) : can(cidrnetmask(cidr))])
+    error_message = "Each value in bastion_subnet_address_prefixes_override must be a valid IPv4 CIDR (e.g. 172.16.0.0/26)."
+  }
+}
+
+###############################################################################
+# Default NSG Rule Extensions
+###############################################################################
+
+variable "additional_nsg_rules" {
+  type = map(map(object({
+    access                       = string
+    description                  = optional(string)
+    destination_address_prefix   = optional(string)
+    destination_address_prefixes = optional(set(string))
+    destination_port_range       = optional(string)
+    destination_port_ranges      = optional(set(string))
+    direction                    = string
+    name                         = string
+    priority                     = number
+    protocol                     = string
+    source_address_prefix        = optional(string)
+    source_address_prefixes      = optional(set(string))
+    source_port_range            = optional(string)
+    source_port_ranges           = optional(set(string))
+  })))
+  default     = {}
+  description = <<DESCRIPTION
+Additional NSG rules merged additively into the orchestrator-generated default NSG for matching
+subnets. Keyed first by the default NSG key (format `nsg-{region}-{vnet_key}-{subnet_key}` — same
+keys as `local.default_network_security_groups` in main.vending.tf), then by rule key.
+
+Use this to add bespoke allow/deny rules to a default NSG without re-enumerating the entire
+default rule set. For the common case of restoring AllowVnetInBound on a plink subnet hosting
+consumer private endpoints, prefer the ergonomic per-subnet `allow_vnet_inbound = true` flag
+in the vending subnet schema rather than this map.
+
+This is ignored when `enable_default_nsg = false` for the subscription — in that case provide a
+full custom NSG via `vending.<region>.network_security_groups`.
+
+Example:
+```hcl
+additional_nsg_rules = {
+  "nsg-uksouth-workload-plink" = {
+    AllowKvOutbound = {
+      name                       = "AllowKvOutbound"
+      access                     = "Allow"
+      direction                  = "Outbound"
+      priority                   = 3950
+      protocol                   = "Tcp"
+      source_address_prefix      = "VirtualNetwork"
+      source_port_range          = "*"
+      destination_address_prefix = "AzureKeyVault.UKSouth"
+      destination_port_range     = "443"
+    }
+  }
+}
+```
+DESCRIPTION
+}
