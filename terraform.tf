@@ -24,6 +24,9 @@ terraform {
 # Get subscription details for dynamic naming
 data "azurerm_subscription" "current" {}
 
+# Get current Terraform identity (for Key Vault RBAC)
+data "azurerm_client_config" "current" {}
+
 ###############################################################################
 # Module - Azure Regions Utility
 ###############################################################################
@@ -161,6 +164,14 @@ locals {
   scc_maintenance_configuration_resource_ids = coalesce(
     try(local.platform_shared_outputs.scc_maintenance_configuration_resource_ids, null),
     {}
+  )
+
+  # AMA User Assigned Managed Identity ID (from platform_shared policy defaults)
+  # Injected into every VM's managed_identities so TF doesn't fight the Azure
+  # Policy that assigns this UAMI to all VMs for Azure Monitor Agent.
+  scc_ama_user_assigned_managed_identity_id = try(
+    local.platform_shared_outputs.templated_inputs.management_group_settings.policy_default_values.ama_user_assigned_managed_identity_id,
+    null
   )
 
   # Hub VNet address spaces (for exact-match UDRs to override peering routes)
