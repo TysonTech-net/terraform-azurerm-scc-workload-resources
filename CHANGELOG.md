@@ -2,6 +2,17 @@
 
 All notable changes to this module are documented in this file. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.10.1] - 2026-05-19
+
+### Fixed
+
+- **Subnet route-table auto-assignment now respects `enable_default_route_table = false`.** Previously, `main.vending.tf` auto-assigned `route_table.key_reference = "rt-${region}"` to every subnet whenever the hub firewall private IP was known (driving `default_route_tables` population), regardless of whether the toggle would actually allow that RT to land in `merged_route_tables`. With the toggle set to `false`, subnets ended up referencing an RT key that sub-vending then couldn't resolve, causing a `coalesce` error at plan: `local.virtual_network_subnet_route_table_available_resource_ids is object with no attributes`. Pre-existing bug, latent until a consumer set the toggle to `false` (BBSWE-Nerdio v1.10.0 first hit). Fix: the auto-assignment now also checks `var.enable_default_route_table`.
+- **Type-stable NSG rule merge.** v1.10.0's `default_network_security_groups` used `condition ? {key = rule} : {}` patterns for conditional `AllowVnetInBound` injection and for `var.additional_nsg_rules` lookups. The true/false branches had different object shapes, which made Terraform infer per-NSG security_rules types inconsistently. The outer `default_network_security_groups` was then inferred as `object` (per-NSG named attributes) instead of `map`, breaking the downstream `merged_network_security_groups` conditional. Fix: both conditional sources now use `{ for k, v in {...} : k => v if <condition> }` which preserves a stable `map(rule_object)` type whether the filter matches or not.
+
+### Compatibility
+
+- Bug-fix release only. No new variables, no API changes. Backwards-compatible with v1.10.0 consumers; resolves the type-inference and dangling-RT-reference errors that prevented `enable_default_route_table = false` + `allow_vnet_inbound = true` working together.
+
 ## [1.10.0] - 2026-05-19
 
 ### Added
