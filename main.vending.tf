@@ -84,23 +84,31 @@ locals {
         #    rule set deliberately omits AllowVnetInBound to force east-west through hub
         #    inspection; this restores it per-subnet for the legitimate intra-VNet PE case.
         # 3. Caller-supplied additional rules from var.additional_nsg_rules, keyed by NSG key.
+        #
+        # Both conditional sources use for-with-if rather than `condition ? {key=val} : {}`
+        # because the latter produces inconsistent object types per NSG (some NSGs have the
+        # extra rule, others don't), which makes Terraform infer default_network_security_groups
+        # as an object rather than a map. The for-with-if pattern preserves a stable
+        # map(rule_object) type whether the condition matches or not.
         security_rules = merge(
           try(local.default_nsg_security_rules_by_region[subnet_key.region], local.default_nsg_security_rules),
-          try(subnet_key.subnet.allow_vnet_inbound, false) ? {
-            AllowVnetInBound = {
-              name                       = "AllowVnetInBound"
-              priority                   = 3998
-              direction                  = "Inbound"
-              access                     = "Allow"
-              protocol                   = "*"
-              source_port_range          = "*"
-              destination_port_range     = "*"
-              source_address_prefix      = "VirtualNetwork"
-              destination_address_prefix = "VirtualNetwork"
-              description                = "Allow intra-VNet inbound (consumer PE NICs etc.)"
-            }
-          } : {},
-          try(var.additional_nsg_rules[subnet_key.key], {}),
+          {
+            for k, v in {
+              AllowVnetInBound = {
+                name                       = "AllowVnetInBound"
+                priority                   = 3998
+                direction                  = "Inbound"
+                access                     = "Allow"
+                protocol                   = "*"
+                source_port_range          = "*"
+                destination_port_range     = "*"
+                source_address_prefix      = "VirtualNetwork"
+                destination_address_prefix = "VirtualNetwork"
+                description                = "Allow intra-VNet inbound (consumer PE NICs etc.)"
+              }
+            } : k => v if try(subnet_key.subnet.allow_vnet_inbound, false)
+          },
+          { for k, v in try(var.additional_nsg_rules[subnet_key.key], {}) : k => v },
         )
       }
     }
@@ -189,9 +197,13 @@ locals {
         # Inject route table and NSG references into subnets
         subnets = {
           for snet_key, snet in coalesce(vnet.subnets, {}) : snet_key => merge(snet, {
-            # Auto-assign route table if hub-and-spoke and not already set
+            # Auto-assign route table if hub-and-spoke, default RT is enabled, and not already set.
+            # var.enable_default_route_table check is needed because default_route_tables is
+            # populated whenever hub firewall IP is available — independent of the toggle. Without
+            # this check, the subnet ends up with a dangling key_reference to an RT that
+            # merged_route_tables (which DOES respect the toggle) doesn't actually create.
             route_table = snet.route_table != null ? snet.route_table : (
-              local.use_hub_and_spoke && contains(keys(local.default_route_tables), "rt-${region}") ? {
+              var.enable_default_route_table && local.use_hub_and_spoke && contains(keys(local.default_route_tables), "rt-${region}") ? {
                 id            = null
                 key_reference = "rt-${region}"
               } : null
