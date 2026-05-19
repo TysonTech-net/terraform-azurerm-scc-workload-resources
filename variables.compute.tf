@@ -90,13 +90,13 @@ variable "compute" {
 
       # Network Interfaces
       network_interfaces = map(object({
-        name                          = optional(string)
+        name                           = optional(string)
         accelerated_networking_enabled = optional(bool, true)
         ip_forwarding_enabled          = optional(bool, false)
-        dns_servers                   = optional(list(string))
-        edge_zone                     = optional(string)
-        internal_dns_name_label       = optional(string)
-        tags                          = optional(map(string))
+        dns_servers                    = optional(list(string))
+        edge_zone                      = optional(string)
+        internal_dns_name_label        = optional(string)
+        tags                           = optional(map(string))
 
         ip_configurations = map(object({
           name                          = optional(string)
@@ -134,10 +134,10 @@ variable "compute" {
       vtpm_enabled               = optional(bool, true)
 
       # Patching
-      patch_mode                = optional(string, "AutomaticByPlatform")
-      patch_assessment_mode     = optional(string, "AutomaticByPlatform")
-      enable_automatic_updates  = optional(bool, true)
-      hotpatching_enabled       = optional(bool, false)
+      patch_mode               = optional(string, "AutomaticByPlatform")
+      patch_assessment_mode    = optional(string, "AutomaticByPlatform")
+      enable_automatic_updates = optional(bool, true)
+      hotpatching_enabled      = optional(bool, false)
 
       # Boot Diagnostics
       boot_diagnostics                     = optional(bool, true)
@@ -234,10 +234,10 @@ variable "compute" {
       target_location = string
 
       # Recovery Services Vault Configuration
-      use_existing_vault        = optional(bool, false)  # true = use existing, false = create new
-      vault_name                = optional(string)       # RSV name (create or existing)
-      vault_resource_group_name = optional(string)       # RG for vault (existing vault)
-      vault_resource_group_key  = optional(string)       # Reference to vm_resource_groups
+      use_existing_vault        = optional(bool, false) # true = use existing, false = create new
+      vault_name                = optional(string)      # RSV name (create or existing)
+      vault_resource_group_name = optional(string)      # RG for vault (existing vault)
+      vault_resource_group_key  = optional(string)      # Reference to vm_resource_groups
 
       # Replication Policy
       recovery_point_retention_in_minutes          = optional(number, 1440) # 24 hours
