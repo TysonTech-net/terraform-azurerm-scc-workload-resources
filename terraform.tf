@@ -193,9 +193,12 @@ locals {
 
 locals {
   # Static outbound NSG rules (same for all regions).
-  # All rules use source_address_prefixes (plural list) for type-stable composition
-  # with the inbound rules below. destination_port_ranges = null on rules that only
-  # use destination_port_range, to keep the rule object shape uniform across the merge.
+  # Azure rule: source service tags ("VirtualNetwork", "*", "AzureLoadBalancer", "Internet")
+  # and wildcards MUST use sourceAddressPrefix (singular). They are REJECTED at API level
+  # if placed in sourceAddressPrefixes (plural). CIDR-only rules can use either field;
+  # we use plural for the rules whose source is workload-tfvars-supplied (firewall+bastion).
+  # For type-stable composition across the merged rule map, ALL rules declare BOTH fields —
+  # exactly one is null per rule.
   default_nsg_outbound_rules = {
     AllowVnetOutBound = {
       name                       = "AllowVnetOutBound"
@@ -206,7 +209,8 @@ locals {
       source_port_range          = "*"
       destination_port_range     = "*"
       destination_port_ranges    = null
-      source_address_prefixes    = ["VirtualNetwork"]
+      source_address_prefix      = "VirtualNetwork"
+      source_address_prefixes    = null
       destination_address_prefix = "VirtualNetwork"
       description                = "Allow outbound traffic to VNet"
     }
@@ -219,7 +223,8 @@ locals {
       source_port_range          = "*"
       destination_port_range     = "*"
       destination_port_ranges    = null
-      source_address_prefixes    = ["*"]
+      source_address_prefix      = "*"
+      source_address_prefixes    = null
       destination_address_prefix = "Internet"
       description                = "Allow outbound traffic to Internet (via firewall)"
     }
@@ -232,7 +237,8 @@ locals {
       source_port_range          = "*"
       destination_port_range     = "*"
       destination_port_ranges    = null
-      source_address_prefixes    = ["*"]
+      source_address_prefix      = "*"
+      source_address_prefixes    = null
       destination_address_prefix = "*"
       description                = "Deny all other outbound traffic"
     }
@@ -261,6 +267,7 @@ locals {
           source_port_range       = "*"
           destination_port_range  = "*"
           destination_port_ranges = null
+          source_address_prefix   = null
           source_address_prefixes = (
             var.enable_default_nsg_firewall_rule
             && try(length(local.firewall_subnet_address_prefixes[region]), 0) > 0
@@ -277,6 +284,7 @@ locals {
           source_port_range       = "*"
           destination_port_range  = null
           destination_port_ranges = ["22", "3389"]
+          source_address_prefix   = null
           source_address_prefixes = (
             var.enable_default_nsg_bastion_rule
             && try(length(local.bastion_subnet_address_prefixes[region]), 0) > 0
@@ -293,7 +301,8 @@ locals {
           source_port_range          = "*"
           destination_port_range     = "*"
           destination_port_ranges    = null
-          source_address_prefixes    = ["AzureLoadBalancer"]
+          source_address_prefix      = "AzureLoadBalancer"
+          source_address_prefixes    = null
           destination_address_prefix = "*"
           description                = "Allow inbound traffic from Azure Load Balancer"
         }
@@ -306,7 +315,8 @@ locals {
           source_port_range          = "*"
           destination_port_range     = "*"
           destination_port_ranges    = null
-          source_address_prefixes    = ["*"]
+          source_address_prefix      = "*"
+          source_address_prefixes    = null
           destination_address_prefix = "*"
           description                = "Deny all other inbound traffic"
         }
