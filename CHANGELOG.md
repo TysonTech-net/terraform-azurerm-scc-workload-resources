@@ -2,6 +2,65 @@
 
 All notable changes to this module are documented in this file. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.11.0] - 2026-05-20
+
+### BREAKING CHANGES
+
+- **Dropped SCC bolt-on outputs.** v1.11.0 reads ONLY accelerator-stock `outputs.tf` from hub state. The three `scc_*` outputs (`scc_hub_router_private_ip_addresses`, `scc_firewall_subnet_address_prefixes`, `scc_bastion_subnet_address_prefixes`) introduced in v1.10.0 are no longer read. Hub repos can delete them once all consumers are on v1.11.0.
+- **Variable renames** (workload tfvars require updating at v1.11.0 bump):
+  - `hub_router_subnet_address_prefixes_override` (`map(string)`) → `hub_router_subnet_address_prefixes` (`map(list(string))`)
+  - `bastion_subnet_address_prefixes_override` (`map(string)`) → `bastion_subnet_address_prefixes` (`map(list(string))`)
+  - `_override` suffix dropped because these are first-class required inputs in v1.11.0 (no hub-state fallback for subnet CIDRs — the AVM hub pattern module has no native subnet-CIDR outputs).
+  - Shape changed from string to `list(string)` per region to accommodate multi-NIC NVA clusters spanning multiple subnets. Single-element lists are normal for AzFw and single-NIC NVAs.
+- **Required inputs when default NSG rules enabled.** With `enable_default_nsg = true`:
+  - `enable_default_nsg_firewall_rule = true` (default) → `hub_router_subnet_address_prefixes` REQUIRED per region in `vending`.
+  - `enable_default_nsg_bastion_rule = true` (default) → `bastion_subnet_address_prefixes` REQUIRED per region.
+  - Missing inputs fail plan via a `precondition` block with an actionable error message naming the missing variable and region.
+- **Legacy AVM fallback removed.** Resolution chain for hub router IP simplified from `override → SCC → hub_and_spoke_vnet_firewall_private_ip_address → empty` to `override → dns_server_ip_address → fail`. The AVM `dns_server_ip_address` output is already topology-agnostic (returns the AzFw private IP when firewall is deployed, returns `var.hub_virtual_networks.X.hub_virtual_network.hub_router_ip_address` for NVA mode), so the legacy fallback was redundant.
+- **NSG rule shape: `source_address_prefix` → `source_address_prefixes`** (plural). All default rules now use the list-shape source field for type-stable composition with the new list-shape input variables. `source_address_prefix` is set to `null` on all default rules.
+
+### Added
+
+- **Per-rule NSG toggles** (`bool`, default `true`):
+  - `enable_default_nsg_firewall_rule` — when false, `AllowFirewallInBound` source falls through to `["0.0.0.0/32"]` (non-matchable). Useful for PaaS-only workloads with no spoke→hub return traffic.
+  - `enable_default_nsg_bastion_rule` — same shape for `AllowBastionInBound`. Useful for workloads with no Bastion-reachable admin path.
+- **`terraform_data.validate_hub_router_inputs`** resource (one per region in `vending`) — hosts the precondition blocks that fire at plan time with clear actionable errors when required inputs are missing.
+
+### Changed
+
+- **Hub contract simplified to ONE output**: `dns_server_ip_address` (already stock in every accelerator-generated hub). Same contract works for moj-eslz (AzFw), BBSWE (NVA), and any future customer regardless of hub topology.
+- **`dns_ips_raw` local renamed to `hub_router_ips_raw`** internally (purely semantic — the value IS the hub router IP, which happens to also be the VNet DNS server in typical hub-and-spoke patterns).
+
+### Migration guidance
+
+Workload repo (per repo, after module tag exists):
+
+1. Bump `?ref=v1.10.2` → `?ref=v1.11.0` in `main.tf`.
+2. Update workload `variables.tf` to declare the renamed + new variables (`hub_router_subnet_address_prefixes`, `bastion_subnet_address_prefixes`, `enable_default_nsg_firewall_rule`, `enable_default_nsg_bastion_rule`).
+3. Update workload `main.tf` to pass the new variables to the module.
+4. Update workload `.platform-<workload>.auto.tfvars` to:
+   - Rename `*_override` keys to drop the suffix.
+   - Convert single-string values to single-element lists: `"172.16.0.96/27"` → `["172.16.0.96/27"]`.
+   - Add new entries per region present in `vending`.
+5. Local `terraform plan` — expect: 2 new `terraform_data.validate_hub_router_inputs` resources per region (no-ops), 4 NSG in-place updates per region (source field switched to plural — cosmetic, end-state functionally unchanged).
+6. Apply via your usual CD path.
+
+Hub repo (one-time per customer, AFTER all consumers on v1.11.0):
+
+- Delete `scc_hub_router_private_ip_addresses`, `scc_firewall_subnet_address_prefixes`, `scc_bastion_subnet_address_prefixes` outputs from `scc.outputs.*.tf`. Plan should show zero resource changes (outputs are metadata).
+
+### Compatibility
+
+- **Breaking.** Workload tfvars require the variable rename and shape change. The module will fail plan with clear precondition errors until tfvars are updated.
+- moj-eslz consumers: out of scope. Per BBSWE owner 2026-05-20, moj will fork from its current module version if needed.
+
+### Why
+
+User-driven decision (2026-05-20):
+- The accelerator-stock `outputs.tf` already exposes everything needed for the next-hop IP via `dns_server_ip_address` (topology-agnostic via AVM internal logic). No reason to maintain a parallel `scc_*` contract.
+- Subnet CIDRs aren't natively exposed by the AVM hub pattern module, and TF can't filter subnets by IP-in-CIDR. Data-source auto-discovery would require subnet-name input + cross-sub RBAC + slower plans, saving zero work for any non-AzFw customer. Workload tfvars input is cheaper and clearer.
+- Tight subnet-scoped NSG rules (not hub-VNet-wide) for least-privilege; per-rule toggles allow workloads with no Bastion/firewall flow to opt out.
+
 ## [1.10.2] - 2026-05-19
 
 ### Fixed

@@ -166,23 +166,30 @@ DESCRIPTION
 }
 
 ###############################################################################
-# Hub Topology Overrides
+# Hub Topology Inputs
 ###############################################################################
-# Caller-side bypass of the hub-state lookup. All defaults are {} so existing
-# consumers see no behaviour change. When a key is set for a given region, it
-# beats both the canonical SCC contract output (`scc_*` from hub state) and
-# the legacy AVM-stock output. See README for the full resolution order.
+# v1.11.0 contract: the module reads a SINGLE output (`dns_server_ip_address`)
+# from the consuming hub's remote state for the hub-router IP. Subnet CIDRs
+# used by the default NSG inbound rules are supplied by workload tfvars below
+# — the AVM hub-and-spoke pattern module has no native subnet-CIDR outputs and
+# TF can't filter subnets by IP-in-CIDR, so workload-side input is required.
+#
+# `hub_router_private_ip_override` is optional (defaults to outputs.tf-supplied
+# value). `hub_router_subnet_address_prefixes` and `bastion_subnet_address_prefixes`
+# are REQUIRED when their respective default NSG rules are enabled — a
+# precondition on the consuming module fails plan with a clear error if missing.
 
 variable "hub_router_private_ip_override" {
   type        = map(string)
   default     = {}
   description = <<DESCRIPTION
-Override hub state lookup for the hub router next-hop IP per region. Map key = region name
-(e.g. "uksouth"), value = IPv4 string. When non-empty for a region, beats both the canonical
-SCC `scc_hub_router_private_ip_addresses` and the legacy AVM
-`hub_and_spoke_vnet_firewall_private_ip_address` outputs.
+Optional override for the hub router next-hop IP per region (the IP that workload
+default route table sends 0.0.0.0/0 to). Map key = region name (e.g. "uksouth"),
+value = IPv4 string. When set, beats the hub's `dns_server_ip_address` remote-state
+output.
 
-Use when hub state is inaccessible or exposes the value under a non-standard name.
+Use when the hub's accelerator-stock `dns_server_ip_address` output is null
+(unusual) or when forcing a specific IP for an isolated test deployment.
 
 Example:
 ```hcl
@@ -199,48 +206,107 @@ DESCRIPTION
   }
 }
 
-variable "hub_router_subnet_address_prefixes_override" {
-  type        = map(string)
+variable "hub_router_subnet_address_prefixes" {
+  type        = map(list(string))
   default     = {}
   description = <<DESCRIPTION
-Override hub state lookup for the hub router / firewall front-end subnet CIDR per region.
-Used as the source CIDR for the AllowFirewallInBound rule in default NSGs.
+Hub firewall / NVA front-end subnet CIDR(s) per region. Map key = region name,
+value = list of CIDR strings (single-element list for typical AzFw or single-LB
+NVA setups; multi-element for multi-NIC NVA clusters spanning multiple subnets).
+Used as the `source_address_prefixes` for the default `AllowFirewallInBound` NSG rule.
 
-Example:
+REQUIRED when `enable_default_nsg = true` AND `enable_default_nsg_firewall_rule = true`.
+A precondition on the consuming module fails plan if a region in `var.vending`
+has no entry here when the rule is enabled.
+
+Example (BBSWE NVA, trust subnet):
 ```hcl
-hub_router_subnet_address_prefixes_override = {
-  uksouth = "172.16.0.128/26"
-  ukwest  = "172.24.0.128/26"
+hub_router_subnet_address_prefixes = {
+  uksouth = ["172.16.0.96/27"]
+  ukwest  = ["172.24.0.96/27"]
+}
+```
+
+Example (moj AzFw, AzureFirewallSubnet):
+```hcl
+hub_router_subnet_address_prefixes = {
+  uksouth = ["10.0.0.0/26"]
 }
 ```
 DESCRIPTION
 
   validation {
-    condition     = alltrue([for cidr in values(var.hub_router_subnet_address_prefixes_override) : can(cidrnetmask(cidr))])
-    error_message = "Each value in hub_router_subnet_address_prefixes_override must be a valid IPv4 CIDR (e.g. 172.16.0.128/26)."
+    condition = alltrue([
+      for cidrs in values(var.hub_router_subnet_address_prefixes) : alltrue([
+        for cidr in cidrs : can(cidrnetmask(cidr))
+      ])
+    ])
+    error_message = "Every CIDR in hub_router_subnet_address_prefixes must be a valid IPv4 CIDR (e.g. \"172.16.0.96/27\")."
   }
 }
 
-variable "bastion_subnet_address_prefixes_override" {
-  type        = map(string)
+variable "bastion_subnet_address_prefixes" {
+  type        = map(list(string))
   default     = {}
   description = <<DESCRIPTION
-Override hub state lookup for the Bastion subnet CIDR per region.
-Used as the source CIDR for the AllowBastionInBound rule in default NSGs.
+Azure Bastion subnet CIDR(s) per region. Map key = region name, value = list of
+CIDR strings. Bastion typically uses a single subnet (Azure-enforced name
+`AzureBastionSubnet`), so single-element lists are normal. Used as the
+`source_address_prefixes` for the default `AllowBastionInBound` NSG rule.
+
+REQUIRED when `enable_default_nsg = true` AND `enable_default_nsg_bastion_rule = true`.
+A precondition on the consuming module fails plan if a region in `var.vending`
+has no entry here when the rule is enabled.
 
 Example:
 ```hcl
-bastion_subnet_address_prefixes_override = {
-  uksouth = "172.16.0.0/26"
-  ukwest  = "172.24.0.0/26"
+bastion_subnet_address_prefixes = {
+  uksouth = ["172.16.0.0/26"]
+  ukwest  = ["172.24.0.0/26"]
 }
 ```
 DESCRIPTION
 
   validation {
-    condition     = alltrue([for cidr in values(var.bastion_subnet_address_prefixes_override) : can(cidrnetmask(cidr))])
-    error_message = "Each value in bastion_subnet_address_prefixes_override must be a valid IPv4 CIDR (e.g. 172.16.0.0/26)."
+    condition = alltrue([
+      for cidrs in values(var.bastion_subnet_address_prefixes) : alltrue([
+        for cidr in cidrs : can(cidrnetmask(cidr))
+      ])
+    ])
+    error_message = "Every CIDR in bastion_subnet_address_prefixes must be a valid IPv4 CIDR (e.g. \"172.16.0.0/26\")."
   }
+}
+
+variable "enable_default_nsg_firewall_rule" {
+  type        = bool
+  default     = true
+  description = <<DESCRIPTION
+When true, the default NSG includes an `AllowFirewallInBound` rule at priority 3999
+that allows inbound from `var.hub_router_subnet_address_prefixes[region]`.
+
+Set to false for PaaS-only workloads that don't receive return traffic from the hub
+firewall/NVA (e.g. Nerdio's App Service + PE chain). When false, the rule is still
+emitted for type stability but its source is `["0.0.0.0/32"]` (non-matchable), making
+it a no-op. The `hub_router_subnet_address_prefixes` variable becomes optional.
+
+Ignored when `enable_default_nsg = false`.
+DESCRIPTION
+}
+
+variable "enable_default_nsg_bastion_rule" {
+  type        = bool
+  default     = true
+  description = <<DESCRIPTION
+When true, the default NSG includes an `AllowBastionInBound` rule at priority 4000
+that allows TCP 22/3389 inbound from `var.bastion_subnet_address_prefixes[region]`.
+
+Set to false for workloads with no Bastion-reachable admin path (PaaS-only, or
+workloads using Just-In-Time access only). When false, the rule is still emitted
+for type stability but its source is `["0.0.0.0/32"]` (non-matchable), making it
+a no-op. The `bastion_subnet_address_prefixes` variable becomes optional.
+
+Ignored when `enable_default_nsg = false`.
+DESCRIPTION
 }
 
 ###############################################################################

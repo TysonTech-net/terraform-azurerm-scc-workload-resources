@@ -6,7 +6,7 @@ Multi-region workload vending stack for Azure Landing Zones. Orchestrates subscr
 
 ```hcl
 module "workload_resources" {
-  source = "git::https://github.com/TysonTech-net/terraform-azurerm-scc-workload-resources.git?ref=v1.10.0"
+  source = "git::https://github.com/TysonTech-net/terraform-azurerm-scc-workload-resources.git?ref=v1.11.0"
 
   subscription          = var.subscription
   naming                = var.naming
@@ -67,35 +67,80 @@ Linux VMs skip the auto-generation path and use SSH keys (handled separately by 
 
 ## Hub topology
 
-The module is customer-agnostic. All customer-specificity lives in the consuming `<customer>-alz-mgmt` hub repo — the module's contract is "read a stable set of well-named SCC outputs from hub state". Whatever the hub actually deployed (Azure Firewall, Palo Alto NVA, third-party SD-WAN, hybrid) is the hub repo's responsibility; the module just trusts the outputs.
+The module is customer-agnostic. The hub-state contract is intentionally minimal — ONE remote-state output (`dns_server_ip_address`, accelerator-stock in every ALZ hub repo) plus workload-tfvars-supplied subnet CIDRs for the default NSG inbound rules.
 
-### Canonical SCC outputs the module reads
+### Hub-side contract: ONE output, zero hub-repo work
 
-Each consuming `<customer>-alz-mgmt` repo should expose these outputs from a `scc.outputs.contract.tf` file (or equivalent), regardless of the underlying hub implementation. Shape: `map(hub_key → value)` where the hub key is whatever the consumer's `hub_region_mapping` translates to a region name.
+Every accelerator-generated ALZ hub repo (`outputs.tf`) exposes `dns_server_ip_address` out of the box. The AVM hub-and-spoke pattern module's underlying logic returns the right value for both topologies:
 
-| Output | Value | Used for |
-|---|---|---|
-| `scc_hub_router_private_ip_addresses` | IPv4 string per hub key — next-hop IP for spoke-egress UDRs | Default route table generation |
-| `scc_firewall_subnet_address_prefixes` | CIDR string per hub key — source CIDR for `AllowFirewallInBound` | Default NSG hub-allow rule |
-| `scc_bastion_subnet_address_prefixes` | CIDR string per hub key — source CIDR for `AllowBastionInBound` | Default NSG bastion-allow rule |
+- AzFw hub: returns the deployed Azure Firewall's private IP per region.
+- NVA hub: returns `var.hub_virtual_networks.<key>.hub_virtual_network.hub_router_ip_address` (the NVA front-end LB IP or single-VM IP).
 
-Examples of how a hub repo populates these:
+No `scc.outputs.*.tf` bolt-on. No customer-specific contract file. The module reads `dns_server_ip_address` from remote state and uses it as the next-hop IP for the default route table.
 
-- Azure Firewall hub: `value = module.hub_and_spoke_vnet[0].firewall_private_ip_addresses` (one-line wrap around the stock AVM output).
-- NVA hub: explicit references to NVA load-balancer / VM front-end IPs.
-- Virtual WAN hub: wrap whichever VWAN output carries the firewall private IP.
-- Hybrid: `coalesce()` across the conditional hub modules.
+### Workload-side inputs
 
-### Resolution order
+Subnet CIDRs for the default NSG inbound rules are NOT exposed by the AVM hub pattern module (no native subnet-CIDR outputs). Workload tfvars supply them per region:
 
-For each hub-derived value the module resolves in this order; first non-empty wins.
+```hcl
+hub_router_subnet_address_prefixes = {
+  uksouth = ["172.16.0.96/27"]   # AzFw subnet CIDR OR NVA trust subnet CIDR
+  ukwest  = ["172.24.0.96/27"]
+}
 
-1. **Caller override** (`var.hub_router_private_ip_override`, `var.hub_router_subnet_address_prefixes_override`, `var.bastion_subnet_address_prefixes_override`) — per-workload bypass; defaults to `{}`.
-2. **Canonical SCC output** from hub state — the documented contract.
-3. **Legacy AVM-stock output** (`hub_and_spoke_vnet_firewall_private_ip_address` etc.) — backwards-compatible fallback for hubs that haven't adopted the SCC contract yet.
-4. **Empty** — silent no-op (e.g. a VWAN hub that doesn't expose a firewall IP). Route tables and hub-allow NSG rules are skipped in this case.
+bastion_subnet_address_prefixes = {
+  uksouth = ["172.16.0.0/26"]    # Azure Bastion subnet CIDR
+  ukwest  = ["172.24.0.0/26"]
+}
+```
 
-New consumers should populate (2). Existing AzFw-only consumers continue working via (3) until they add the SCC contract outputs.
+List shape supports multi-NIC NVA clusters spanning multiple subnets. Single-element lists are normal for AzFw and single-NIC NVAs.
+
+### Per-rule opt-out
+
+For workloads that don't need a particular default NSG rule (e.g. PaaS-only with no spoke→hub return traffic, or no Bastion-reachable admin path), set the per-rule toggle to false. The corresponding subnet CIDR variable becomes optional:
+
+```hcl
+enable_default_nsg_firewall_rule = false   # AllowFirewallInBound omitted
+enable_default_nsg_bastion_rule  = false   # AllowBastionInBound omitted
+```
+
+### Resolution chain (per hub-derived value)
+
+For the next-hop IP (used by the default route table):
+
+1. **Caller override**: `var.hub_router_private_ip_override[<region>]` — optional, beats remote state.
+2. **Accelerator-stock**: `dns_server_ip_address` from hub remote state — default path.
+3. **Fail**: precondition error if `enable_default_route_table = true` and neither resolves.
+
+For NSG inbound rule source CIDRs (firewall + bastion):
+
+1. **Workload tfvars**: `var.hub_router_subnet_address_prefixes[<region>]` / `var.bastion_subnet_address_prefixes[<region>]` — required when the corresponding per-rule toggle is true.
+2. **Fail**: precondition error if the rule is enabled and the variable is missing for the region.
+
+Errors at plan time name the missing variable AND the region, so the fix is obvious.
+
+### Migration from v1.10.x
+
+Variable renames + shape changes (BREAKING):
+- `hub_router_subnet_address_prefixes_override` (`map(string)`) → `hub_router_subnet_address_prefixes` (`map(list(string))`)
+- `bastion_subnet_address_prefixes_override` (`map(string)`) → `bastion_subnet_address_prefixes` (`map(list(string))`)
+
+In your workload tfvars, drop `_override` and convert single-string values to single-element lists:
+
+```hcl
+# Before (v1.10.x)
+hub_router_subnet_address_prefixes_override = {
+  uksouth = "172.16.0.96/27"
+}
+
+# After (v1.11.0)
+hub_router_subnet_address_prefixes = {
+  uksouth = ["172.16.0.96/27"]
+}
+```
+
+Hub-side `scc_*` outputs can be deleted after all consumers migrate. See CHANGELOG `1.11.0` entry for the full migration recipe.
 
 ## Customisation surface
 
