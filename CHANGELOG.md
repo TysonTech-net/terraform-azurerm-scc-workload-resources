@@ -2,6 +2,18 @@
 
 All notable changes to this module are documented in this file. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.11.1] - 2026-05-20
+
+### Fixed
+
+- **NSG default rules with service-tag / wildcard sources rejected by Azure.** v1.11.0 switched all default NSG rules to `source_address_prefixes` (plural list) for type-stable composition with the new list-shape input variables. Azure's NSG REST API rejects service tags (`"AzureLoadBalancer"`, `"VirtualNetwork"`, `"Internet"`, `"*"`) when placed in `sourceAddressPrefixes`: error `SecurityRuleParameterContainsUnsupportedValue` at apply time. The constraint is documented (cryptically) and only enforced at the API layer, so plan succeeds but apply fails.
+- **Fix**: rules with service-tag/wildcard sources (`AllowAzureLoadBalancerInBound`, `DenyAllInBound`, `AllowVnetOutBound`, `AllowInternetOutBound`, `DenyAllOutBound`, `AllowVnetInBound`) now use `source_address_prefix` (singular). Rules with workload-supplied CIDR lists (`AllowFirewallInBound`, `AllowBastionInBound`) keep `source_address_prefixes` (plural). All rules declare BOTH fields with one set to `null` for type-stable composition across the merged rule map.
+
+### Compatibility
+
+- Bug-fix release. No new variables, no API changes. Backwards-compatible with v1.11.0 — workload tfvars don't need updating.
+- v1.11.0 consumers should bump to v1.11.1 immediately; v1.11.0 apply will fail on any NSG with default rules.
+
 ## [1.11.0] - 2026-05-20
 
 ### BREAKING CHANGES
