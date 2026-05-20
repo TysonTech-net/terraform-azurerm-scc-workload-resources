@@ -273,7 +273,7 @@ locals {
             && try(length(local.firewall_subnet_address_prefixes[region]), 0) > 0
           ) ? local.firewall_subnet_address_prefixes[region] : ["0.0.0.0/32"]
           destination_address_prefix = "VirtualNetwork"
-          description                = "Allow inbound from hub firewall/NVA subnet(s). Active when enable_default_nsg_firewall_rule=true AND var.hub_router_subnet_address_prefixes[region] is populated."
+          description                = "Allow inbound from hub firewall/NVA subnet(s). Effective only when toggle=true + CIDR var populated."
         }
         AllowBastionInBound = {
           name                    = "AllowBastionInBound"
@@ -290,7 +290,7 @@ locals {
             && try(length(local.bastion_subnet_address_prefixes[region]), 0) > 0
           ) ? local.bastion_subnet_address_prefixes[region] : ["0.0.0.0/32"]
           destination_address_prefix = "VirtualNetwork"
-          description                = "Allow RDP/SSH from Bastion subnet(s). Active when enable_default_nsg_bastion_rule=true AND var.bastion_subnet_address_prefixes[region] is populated."
+          description                = "Allow RDP/SSH from Bastion subnet(s). Effective only when toggle=true + CIDR var populated."
         }
         AllowAzureLoadBalancerInBound = {
           name                       = "AllowAzureLoadBalancerInBound"

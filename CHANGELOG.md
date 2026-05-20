@@ -2,6 +2,17 @@
 
 All notable changes to this module are documented in this file. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.11.2] - 2026-05-20
+
+### Fixed
+
+- **NSG security rule descriptions cannot exceed 140 characters.** Azure REST API rejects with `SecurityRuleDescriptionTooLong` at apply time. v1.11.0 expanded the `AllowFirewallInBound` and `AllowBastionInBound` rule descriptions to include the variable names that gate them; the result was 158–175 characters, over the limit. Plan succeeded, apply failed.
+- **Fix**: trimmed descriptions to ≤120 characters. Same intent, shorter wording.
+
+### Compatibility
+
+- Bug-fix release. No new variables, no API changes. Bump module ref `v1.11.1` → `v1.11.2`.
+
 ## [1.11.1] - 2026-05-20
 
 ### Fixed
