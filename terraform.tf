@@ -96,30 +96,20 @@ locals {
     {}
   ) : {}
 
-  # Canonical SCC contract — populated by every consuming hub repo regardless of
-  # underlying topology. New customers expose `scc_hub_router_private_ip_addresses`
-  # in their alz-mgmt scc.outputs.contract.tf as a hub-key → IP map.
-  firewall_ips_raw_scc = local.connectivity_enabled && local.use_hub_and_spoke ? coalesce(
-    try(local.platform_shared_outputs.scc_hub_router_private_ip_addresses, null), {}
-  ) : {}
-
-  # Legacy compat — AVM hub-and-spoke / VWAN modules' stock outputs. Kept so a
-  # v1.10.0 bump doesn't break consumers whose hub repo hasn't yet adopted the
-  # SCC contract.
-  firewall_ips_raw_legacy = local.connectivity_enabled ? (
-    local.use_hub_and_spoke
-    ? coalesce(try(local.platform_shared_outputs.hub_and_spoke_vnet_firewall_private_ip_address, null), {})
-    : coalesce(try(local.platform_shared_outputs.virtual_wan_firewall_private_ip_address, null), {})
-  ) : {}
-
-  # Hub-state resolution: prefer SCC canonical, fall through to AVM legacy.
-  # Override is applied later at the region-keyed level (see firewall_private_ip_addresses).
-  firewall_ips_raw = length(local.firewall_ips_raw_scc) > 0 ? local.firewall_ips_raw_scc : local.firewall_ips_raw_legacy
-
-  dns_ips_raw = local.connectivity_enabled ? coalesce(
+  # Single hub contract: dns_server_ip_address from accelerator-stock outputs.tf.
+  # The AVM hub-and-spoke pattern module's underlying output is topology-agnostic —
+  # returns var.hub_virtual_networks.X.hub_virtual_network.hub_router_ip_address when
+  # NVA mode, returns the deployed firewall's private IP when AzFw mode. Same value
+  # is used as the VNet DNS server (typical hub-and-spoke pattern: firewall/NVA IS the
+  # forwarder) AND as the next-hop IP for spoke 0.0.0.0/0 UDRs.
+  hub_router_ips_raw = local.connectivity_enabled && local.use_hub_and_spoke ? coalesce(
     try(local.platform_shared_outputs.dns_server_ip_address, null),
     {}
-  ) : {}
+    ) : (
+    local.connectivity_enabled && local.use_virtual_wan ? coalesce(
+      try(local.platform_shared_outputs.virtual_wan_firewall_private_ip_address, null), {}
+    ) : {}
+  )
 
   # Transform hub outputs: remap from hub key to region name using hub_region_mapping
   # If no mapping provided, pass through as-is (assumes keys are already region names)
@@ -133,18 +123,19 @@ locals {
   # hub state doesn't expose (e.g. a workload pointing at an isolated test hub).
   firewall_private_ip_addresses = merge(
     length(var.hub_region_mapping) > 0 ? {
-      for hub_key, region in var.hub_region_mapping : region => local.firewall_ips_raw[hub_key]
-      if contains(keys(local.firewall_ips_raw), hub_key)
-    } : local.firewall_ips_raw,
+      for hub_key, region in var.hub_region_mapping : region => local.hub_router_ips_raw[hub_key]
+      if contains(keys(local.hub_router_ips_raw), hub_key)
+    } : local.hub_router_ips_raw,
     var.hub_router_private_ip_override,
   )
 
-  # DNS server IPs - wrap in list (platform_shared outputs single IP string per region)
+  # DNS server IPs - wrap in list (platform_shared outputs single IP string per region).
+  # Same source as firewall_private_ip_addresses — the hub router IP IS the VNet DNS server.
   dns_server_ip_addresses = length(var.hub_region_mapping) > 0 ? {
-    for hub_key, region in var.hub_region_mapping : region => [local.dns_ips_raw[hub_key]]
-    if contains(keys(local.dns_ips_raw), hub_key)
+    for hub_key, region in var.hub_region_mapping : region => [local.hub_router_ips_raw[hub_key]]
+    if contains(keys(local.hub_router_ips_raw), hub_key)
     } : {
-    for key, value in local.dns_ips_raw : key => [value]
+    for key, value in local.hub_router_ips_raw : key => [value]
   }
 
   # Virtual WAN sidecar virtual network resource IDs
@@ -174,49 +165,15 @@ locals {
     null
   )
 
-  # Hub VNet address spaces (for exact-match UDRs to override peering routes)
-  # Uses scc_hub_vnet_address_spaces which has resolved values from config module
-  hub_vnet_address_spaces_raw = local.use_hub_and_spoke ? coalesce(
-    try(local.platform_shared_outputs.scc_hub_vnet_address_spaces, null),
-    {}
-  ) : {}
+  # Firewall/NVA subnet address prefixes (NSG AllowFirewallInBound source).
+  # v1.11.0: no hub-state read — workload tfvars supplies the CIDR list per region
+  # (no native AVM output exposes subnet CIDRs and IP-in-CIDR filtering isn't
+  # feasible in pure HCL). Region keys are the region NAME, matching var.vending.
+  firewall_subnet_address_prefixes = var.hub_router_subnet_address_prefixes
 
-  hub_vnet_address_spaces = length(var.hub_region_mapping) > 0 ? {
-    for hub_key, region in var.hub_region_mapping : region => local.hub_vnet_address_spaces_raw[hub_key]
-    if contains(keys(local.hub_vnet_address_spaces_raw), hub_key)
-  } : local.hub_vnet_address_spaces_raw
-
-  # Bastion subnet address prefixes (for bypass routes in spoke UDRs)
-  # Enables symmetric routing by bypassing firewall for Bastion traffic
-  bastion_subnet_address_prefixes_raw = local.use_hub_and_spoke ? coalesce(
-    try(local.platform_shared_outputs.scc_bastion_subnet_address_prefixes, null),
-    {}
-  ) : {}
-
-  # Final region-keyed map. Caller override beats the hub-state lookup result.
-  bastion_subnet_address_prefixes = merge(
-    length(var.hub_region_mapping) > 0 ? {
-      for hub_key, region in var.hub_region_mapping : region => local.bastion_subnet_address_prefixes_raw[hub_key]
-      if contains(keys(local.bastion_subnet_address_prefixes_raw), hub_key) && local.bastion_subnet_address_prefixes_raw[hub_key] != null
-    } : local.bastion_subnet_address_prefixes_raw,
-    var.bastion_subnet_address_prefixes_override,
-  )
-
-  # Firewall subnet address prefixes (for NSG inbound rules)
-  # Allows traffic from firewall to spokes (return traffic, inspected spoke-to-spoke, etc.)
-  firewall_subnet_address_prefixes_raw = local.use_hub_and_spoke ? coalesce(
-    try(local.platform_shared_outputs.scc_firewall_subnet_address_prefixes, null),
-    {}
-  ) : {}
-
-  # Final region-keyed map. Caller override beats the hub-state lookup result.
-  firewall_subnet_address_prefixes = merge(
-    length(var.hub_region_mapping) > 0 ? {
-      for hub_key, region in var.hub_region_mapping : region => local.firewall_subnet_address_prefixes_raw[hub_key]
-      if contains(keys(local.firewall_subnet_address_prefixes_raw), hub_key) && local.firewall_subnet_address_prefixes_raw[hub_key] != null
-    } : local.firewall_subnet_address_prefixes_raw,
-    var.hub_router_subnet_address_prefixes_override,
-  )
+  # Bastion subnet address prefixes (NSG AllowBastionInBound source).
+  # v1.11.0: same shape — workload tfvars supplies the CIDR list per region.
+  bastion_subnet_address_prefixes = var.bastion_subnet_address_prefixes
 
   # Gateway route tables (conditional - only if gateway routing is enabled)
   gateway_route_tables_raw = local.use_hub_and_spoke ? coalesce(
@@ -235,7 +192,10 @@ locals {
 ###############################################################################
 
 locals {
-  # Static outbound NSG rules (same for all regions)
+  # Static outbound NSG rules (same for all regions).
+  # All rules use source_address_prefixes (plural list) for type-stable composition
+  # with the inbound rules below. destination_port_ranges = null on rules that only
+  # use destination_port_range, to keep the rule object shape uniform across the merge.
   default_nsg_outbound_rules = {
     AllowVnetOutBound = {
       name                       = "AllowVnetOutBound"
@@ -245,7 +205,8 @@ locals {
       protocol                   = "*"
       source_port_range          = "*"
       destination_port_range     = "*"
-      source_address_prefix      = "VirtualNetwork"
+      destination_port_ranges    = null
+      source_address_prefixes    = ["VirtualNetwork"]
       destination_address_prefix = "VirtualNetwork"
       description                = "Allow outbound traffic to VNet"
     }
@@ -257,7 +218,8 @@ locals {
       protocol                   = "*"
       source_port_range          = "*"
       destination_port_range     = "*"
-      source_address_prefix      = "*"
+      destination_port_ranges    = null
+      source_address_prefixes    = ["*"]
       destination_address_prefix = "Internet"
       description                = "Allow outbound traffic to Internet (via firewall)"
     }
@@ -269,52 +231,58 @@ locals {
       protocol                   = "*"
       source_port_range          = "*"
       destination_port_range     = "*"
-      source_address_prefix      = "*"
+      destination_port_ranges    = null
+      source_address_prefixes    = ["*"]
       destination_address_prefix = "*"
       description                = "Deny all other outbound traffic"
     }
   }
 
-  # Region-aware NSG rules - inbound rules use firewall/bastion subnet prefixes
-  # These rules ensure:
-  # - AllowFirewall: All traffic from firewall (covers return traffic, inspected spoke-to-spoke, etc.)
-  # - AllowBastion: RDP/SSH from Bastion (bypasses firewall via UDR)
-  # - AllowAzureLB: Azure health probes
-  # - DenyAll: Block everything else
-  # All inbound + outbound default rules always emitted with the same shape across regions.
-  # Hub-derived source CIDRs (AllowFirewallInBound, AllowBastionInBound) fall through to
-  # "0.0.0.0/32" — a non-matchable IP — when the corresponding hub-state lookup is absent,
-  # rather than omitting the rule conditionally. Conditional emission produced per-region
-  # type variance that propagated into default_network_security_groups, breaking the
-  # downstream map inference. The non-matchable fallback is a no-op in practice (no traffic
-  # can have source 0.0.0.0/32) while keeping the type stable.
+  # Region-aware default inbound NSG rules.
+  # AllowFirewallInBound + AllowBastionInBound are gated by per-rule toggles
+  # (var.enable_default_nsg_firewall_rule, var.enable_default_nsg_bastion_rule).
+  # When a toggle is true, source_address_prefixes uses the workload-tfvars-supplied
+  # CIDR list (var.hub_router_subnet_address_prefixes / var.bastion_subnet_address_prefixes).
+  # When a toggle is false (or the CIDR var is missing for the region), source falls
+  # through to ["0.0.0.0/32"] — a non-matchable singleton — keeping the rule shape
+  # stable across NSGs without conditionally omitting the rule (which produced per-NSG
+  # type variance in v1.10.x, see feedback-tf-type-stable-conditional-map).
+  # Preconditions on the consuming subscription_vending module fail plan if a toggle
+  # is true but the CIDR var is missing for a region.
   default_nsg_security_rules_by_region = {
     for region in keys(var.vending) : region => merge(
       {
         AllowFirewallInBound = {
-          name                       = "AllowFirewallInBound"
-          priority                   = 3999
-          direction                  = "Inbound"
-          access                     = "Allow"
-          protocol                   = "*"
-          source_port_range          = "*"
-          destination_port_range     = "*"
-          source_address_prefix      = try(local.firewall_subnet_address_prefixes[region], "0.0.0.0/32")
+          name                    = "AllowFirewallInBound"
+          priority                = 3999
+          direction               = "Inbound"
+          access                  = "Allow"
+          protocol                = "*"
+          source_port_range       = "*"
+          destination_port_range  = "*"
+          destination_port_ranges = null
+          source_address_prefixes = (
+            var.enable_default_nsg_firewall_rule
+            && try(length(local.firewall_subnet_address_prefixes[region]), 0) > 0
+          ) ? local.firewall_subnet_address_prefixes[region] : ["0.0.0.0/32"]
           destination_address_prefix = "VirtualNetwork"
-          description                = "Allow inbound traffic from firewall (return traffic, inspected flows)"
+          description                = "Allow inbound from hub firewall/NVA subnet(s). Active when enable_default_nsg_firewall_rule=true AND var.hub_router_subnet_address_prefixes[region] is populated."
         }
         AllowBastionInBound = {
-          name                       = "AllowBastionInBound"
-          priority                   = 4000
-          direction                  = "Inbound"
-          access                     = "Allow"
-          protocol                   = "Tcp"
-          source_port_range          = "*"
-          destination_port_range     = null
-          destination_port_ranges    = ["22", "3389"]
-          source_address_prefix      = try(local.bastion_subnet_address_prefixes[region], "0.0.0.0/32")
+          name                    = "AllowBastionInBound"
+          priority                = 4000
+          direction               = "Inbound"
+          access                  = "Allow"
+          protocol                = "Tcp"
+          source_port_range       = "*"
+          destination_port_range  = null
+          destination_port_ranges = ["22", "3389"]
+          source_address_prefixes = (
+            var.enable_default_nsg_bastion_rule
+            && try(length(local.bastion_subnet_address_prefixes[region]), 0) > 0
+          ) ? local.bastion_subnet_address_prefixes[region] : ["0.0.0.0/32"]
           destination_address_prefix = "VirtualNetwork"
-          description                = "Allow RDP/SSH from Bastion (bypasses firewall via UDR)"
+          description                = "Allow RDP/SSH from Bastion subnet(s). Active when enable_default_nsg_bastion_rule=true AND var.bastion_subnet_address_prefixes[region] is populated."
         }
         AllowAzureLoadBalancerInBound = {
           name                       = "AllowAzureLoadBalancerInBound"
@@ -324,7 +292,8 @@ locals {
           protocol                   = "*"
           source_port_range          = "*"
           destination_port_range     = "*"
-          source_address_prefix      = "AzureLoadBalancer"
+          destination_port_ranges    = null
+          source_address_prefixes    = ["AzureLoadBalancer"]
           destination_address_prefix = "*"
           description                = "Allow inbound traffic from Azure Load Balancer"
         }
@@ -336,7 +305,8 @@ locals {
           protocol                   = "*"
           source_port_range          = "*"
           destination_port_range     = "*"
-          source_address_prefix      = "*"
+          destination_port_ranges    = null
+          source_address_prefixes    = ["*"]
           destination_address_prefix = "*"
           description                = "Deny all other inbound traffic"
         }

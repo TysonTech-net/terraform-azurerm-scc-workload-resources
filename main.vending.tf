@@ -108,7 +108,8 @@ locals {
               protocol                   = "*"
               source_port_range          = "*"
               destination_port_range     = "*"
-              source_address_prefix      = try(subnet_key.subnet.allow_vnet_inbound, false) ? "VirtualNetwork" : "0.0.0.0/32"
+              destination_port_ranges    = null
+              source_address_prefixes    = try(subnet_key.subnet.allow_vnet_inbound, false) ? ["VirtualNetwork"] : ["0.0.0.0/32"]
               destination_address_prefix = "VirtualNetwork"
               description                = "Allow intra-VNet inbound (active only when subnet.allow_vnet_inbound = true; non-matchable source 0.0.0.0/32 otherwise)"
             }
