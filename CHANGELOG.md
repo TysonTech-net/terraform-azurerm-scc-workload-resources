@@ -2,6 +2,12 @@
 
 All notable changes to this module are documented in this file. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.12.4] - 2026-05-22
+
+### Fixed
+
+- **Bump workload-vm pin v1.4.2 → v1.4.3** to pick up the per-RG auto-AvSet fix. v1.4.2 (and earlier) placed exactly one AvSet per zoneless region in the first sorted vm_resource_groups RG; Azure forbids cross-RG AvSet membership, so VMs in any other RG failed at apply time. v1.4.3 creates one AvSet per RG containing enabled VMs.
+
 ## [1.12.3] - 2026-05-22
 
 ### Fixed
