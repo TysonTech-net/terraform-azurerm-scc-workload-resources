@@ -56,6 +56,16 @@ variable "compute" {
       # Required
       name = string
 
+      # Per-VM kill-switch. When false, NO resources are created for this VM:
+      # no NICs, no managed disks, no role assignments, no backup protection,
+      # no maintenance assignment, no Key Vault secret. The VM block stays in
+      # tfvars (preserves operational metadata) but contributes zero to the plan.
+      # AND-ed with region-level `compute_enabled` — both must be true for the
+      # VM to deploy. Useful for parking individual VMs (e.g. capacity hold on
+      # one role, awaiting marketplace EULA, scheduled decommission staging)
+      # without commenting out the HCL block.
+      enabled = optional(bool, true)
+
       # Resource Group - either key reference or explicit name
       resource_group_key  = optional(string)
       resource_group_name = optional(string)
