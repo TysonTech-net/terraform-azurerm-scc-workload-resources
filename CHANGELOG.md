@@ -2,6 +2,16 @@
 
 All notable changes to this module are documented in this file. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.12.1] - 2026-05-22
+
+### Fixed
+
+- **Bump workload-vm pin v1.4.0 → v1.4.1** to pick up the auto-AvSet RG resolution fix. v1.4.0's `coalesce(try(...), try(...))` for the auto-AvSet RG name failed whenever both branches resolved to null — hit by every consumer calling the module against a zoned region (UKS has zones, so `_auto_avset_enabled = false` for that region, but the local still evaluated and crashed). v1.4.1 gates the entire expression on `_auto_avset_enabled` and uses `try()` (which permits null fallback) inside.
+
+### Compatibility
+
+- Bug-fix release. No new variables, no API changes. v1.12.0 consumers MUST bump to v1.12.1; v1.12.0 plan errors with `Call to function "coalesce" failed` on any workload calling the module from a zoned region.
+
 ## [1.12.0] - 2026-05-22
 
 ### Added

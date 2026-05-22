@@ -300,7 +300,7 @@ resource "azurerm_role_assignment" "terraform_kv_secrets_officer" {
 ###############################################################################
 
 module "workload_vms" {
-  source   = "git::https://github.com/TysonTech-net/terraform-azurerm-scc-workload-vm.git?ref=v1.4.0"
+  source   = "git::https://github.com/TysonTech-net/terraform-azurerm-scc-workload-vm.git?ref=v1.4.1"
   for_each = var.compute_enabled ? var.compute : {}
 
   # Subscription
