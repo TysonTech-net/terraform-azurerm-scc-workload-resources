@@ -2,6 +2,18 @@
 
 All notable changes to this module are documented in this file. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.12.0] - 2026-05-22
+
+### Added
+
+- **Per-VM `enabled` toggle.** New optional `enabled = optional(bool, true)` field on the VM object in `var.compute[<region>].vms[<key>]`. When `false`, NO resources are created for that VM — no NICs, no disks, no role assignments, no backup protection, no maintenance assignment, no Key Vault secret. The VM block stays in tfvars so operational metadata is preserved.
+- Filter is applied in `local.compute_vms_with_resolved_subnets` (`main.compute.tf:42-46`) via an `if try(vm.enabled, true)` clause, so every downstream local (credentials, sub-level policy assignments, the workload-vm module call) naturally skips disabled VMs.
+- AND-ed with the existing region-level `compute_enabled`: both must be true for a VM to deploy. Useful for parking individual VMs (capacity hold on one role, marketplace EULA pending, scheduled decom staging) without commenting out the HCL block.
+
+### Compatibility
+
+- Non-breaking. Backwards-compatible with v1.11.x consumers — workload tfvars don't need updating unless they want to use the new toggle. The field defaults to `true`.
+
 ## [1.11.2] - 2026-05-20
 
 ### Fixed

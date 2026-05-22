@@ -39,6 +39,11 @@ locals {
   # Resolve subnet IDs for VM NICs based on subnet_reference
   # Also handles maintenance configuration via tags (dynamic scoping) or legacy explicit assignments
   # Computes subnet ID from: subscription, RG name, VNet name, and subnet name
+  # Per-VM kill-switch filter (`vm.enabled = false` parks the VM without
+  # commenting out its tfvars block). Filtering at this upstream local means
+  # every downstream consumer (compute_vms_with_credentials, sub-level policy
+  # assignments, the workload-vm module call) naturally skips disabled VMs.
+  # Default is `true` — existing tfvars continue to work without modification.
   compute_vms_with_resolved_subnets = {
     for region, config in var.compute : region => {
       for vm_key, vm in config.vms : vm_key => merge(vm, {
@@ -162,7 +167,7 @@ locals {
             {}
           )
         )
-      })
+      }) if try(vm.enabled, true)
     }
   }
 }
