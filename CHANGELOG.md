@@ -2,6 +2,16 @@
 
 All notable changes to this module are documented in this file. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.12.2] - 2026-05-22
+
+### Fixed
+
+- **Bump workload-vm pin v1.4.1 → v1.4.2** to pick up the second `coalesce(null, null)` fix. v1.4.1 fixed `_auto_avset_resource_group_name` but missed `effective_avset_id_per_vm` — same class of bug, just a different spot. v1.4.2 corrects both. v1.12.0 and v1.12.1 consumers MUST bump to v1.12.2; both earlier versions error at plan in any zoned region.
+
+### Compatibility
+
+- Bug-fix release. No new variables, no API changes.
+
 ## [1.12.1] - 2026-05-22
 
 ### Fixed
