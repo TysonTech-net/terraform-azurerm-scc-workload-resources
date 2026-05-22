@@ -44,9 +44,19 @@ locals {
   # every downstream consumer (compute_vms_with_credentials, sub-level policy
   # assignments, the workload-vm module call) naturally skips disabled VMs.
   # Default is `true` — existing tfvars continue to work without modification.
+  #
+  # The filter is applied via a pre-filter `{ for k, v in vms : k => v if ... }`
+  # against the input map rather than a trailing `if` on the outer iteration.
+  # The trailing-if form on a multi-line value expression didn't reliably exclude
+  # entries in v1.12.0–v1.12.2 (HCL parser quirk with merge() across line breaks).
+  _enabled_vms_per_region = {
+    for region, config in var.compute : region => {
+      for vm_key, vm in config.vms : vm_key => vm if try(vm.enabled, true)
+    }
+  }
   compute_vms_with_resolved_subnets = {
     for region, config in var.compute : region => {
-      for vm_key, vm in config.vms : vm_key => merge(vm, {
+      for vm_key, vm in local._enabled_vms_per_region[region] : vm_key => merge(vm, {
         network_interfaces = {
           for nic_key, nic in vm.network_interfaces : nic_key => merge(nic, {
             ip_configurations = {
@@ -167,7 +177,7 @@ locals {
             {}
           )
         )
-      }) if try(vm.enabled, true)
+      })
     }
   }
 }

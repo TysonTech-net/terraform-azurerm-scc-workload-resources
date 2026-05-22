@@ -2,6 +2,17 @@
 
 All notable changes to this module are documented in this file. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.12.3] - 2026-05-22
+
+### Fixed
+
+- **Per-VM `enabled = false` was silently ignored.** v1.12.0–v1.12.2 placed the filter as a trailing `if try(vm.enabled, true)` clause on the inner `for` comprehension whose value expression was a multi-line `merge(vm, {...})` call. HCL parser quirk: the trailing `if` didn't reliably exclude entries when the value expression spanned line breaks — disabled VMs still ended up in `local.compute_vms_with_resolved_subnets` and downstream consumers (the workload-vm module call) created them anyway.
+- **Fix**: pre-filter the input map via `local._enabled_vms_per_region = { for r, c in var.compute : r => { for k, v in c.vms : k => v if try(v.enabled, true) } }`, then iterate `_enabled_vms_per_region` in `compute_vms_with_resolved_subnets`. Identical semantics, parsed unambiguously.
+
+### Compatibility
+
+- Bug-fix release. No new variables, no API changes. v1.12.0–v1.12.2 consumers MUST bump to v1.12.3 if they use the per-VM `enabled` toggle; earlier versions silently no-op the false case.
+
 ## [1.12.2] - 2026-05-22
 
 ### Fixed
