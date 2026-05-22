@@ -10,9 +10,13 @@ All notable changes to this module are documented in this file. Format follows [
 - Filter is applied in `local.compute_vms_with_resolved_subnets` (`main.compute.tf:42-46`) via an `if try(vm.enabled, true)` clause, so every downstream local (credentials, sub-level policy assignments, the workload-vm module call) naturally skips disabled VMs.
 - AND-ed with the existing region-level `compute_enabled`: both must be true for a VM to deploy. Useful for parking individual VMs (capacity hold on one role, marketplace EULA pending, scheduled decom staging) without commenting out the HCL block.
 
+### Changed
+
+- **Workload-vm child module bumped to v1.4.0.** Pulls in auto-create Availability Set for zoneless regions (e.g. UK West). When a workload's region has no AZs, the module now creates one AvSet per region and joins every VM to it without requiring tfvars work. Per-VM override via `availability_set_resource_id` still wins. Zoned regions (e.g. UK South) continue to use per-VM `zone` placement as before.
+
 ### Compatibility
 
-- Non-breaking. Backwards-compatible with v1.11.x consumers — workload tfvars don't need updating unless they want to use the new toggle. The field defaults to `true`.
+- Non-breaking. Backwards-compatible with v1.11.x consumers — workload tfvars don't need updating unless they want to use the new toggle. The field defaults to `true`. The workload-vm v1.4.0 bump is also non-breaking (default `auto_create_availability_set = true` only fires in zoneless regions).
 
 ## [1.11.2] - 2026-05-20
 
